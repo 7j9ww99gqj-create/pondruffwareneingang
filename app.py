@@ -1302,6 +1302,162 @@ def ai_search() -> None:
 
         st.markdown('</div>', unsafe_allow_html=True)
 
+
+def wiso_order_block(entry: Dict) -> str:
+    lines = [
+        "WISO AUFTRAGSDATEN",
+        "------------------",
+        f"Lieferschein: {entry.get('id', entry.get('delivery_id', ''))}",
+        f"Datum Wareneingang: {entry.get('date', '')}",
+        f"Erfasst von: {entry.get('operator', '-')}",
+        "",
+        f"Kunde: {entry.get('customer', '')}",
+        f"Artikelnummer: {entry.get('article_no', '')}",
+        f"Artikelbezeichnung: {entry.get('description', '')}",
+        f"Menge: {entry.get('quantity', '')}",
+        f"MaÃe: {entry_dimensions(entry)}",
+        "",
+        f"Poliert: {entry.get('polished', 'Nein')}",
+        f"Preis Polieren: {float(entry.get('polishing_price', 0) or 0):.2f} EUR",
+        f"Beschichtet: {entry.get('coated', 'Nein')}",
+        f"Beschichtung: {entry.get('coating', 'Keine')}",
+        "",
+        f"Hinweise: {entry.get('notes', '')}",
+    ]
+    return "\n".join(lines)
+
+
+def wiso_order_csv_row(entry: Dict) -> Dict:
+    return {
+        "Kunde": entry.get("customer", ""),
+        "Artikelnummer": entry.get("article_no", ""),
+        "Artikelbezeichnung": entry.get("description", ""),
+        "Menge": entry.get("quantity", ""),
+        "Form": entry.get("shape", ""),
+        "Masse": entry_dimensions(entry),
+        "Poliert": entry.get("polished", "Nein"),
+        "Preis Polieren": f"{float(entry.get('polishing_price', 0) or 0):.2f}",
+        "Beschichtet": entry.get("coated", "Nein"),
+        "Beschichtung": entry.get("coating", "Keine"),
+        "Lieferschein": entry.get("id", entry.get("delivery_id", "")),
+        "Datum Wareneingang": entry.get("date", ""),
+        "Bediener": entry.get("operator", "-"),
+        "Hinweise": entry.get("notes", ""),
+    }
+
+
+def make_wiso_order_html(entry: Dict) -> bytes:
+    block = wiso_order_block(entry)
+    doc = f"""
+    <!doctype html>
+    <html lang="de">
+    <head>
+      <meta charset="utf-8">
+      <title>WISO Ãbergabe {html.escape(str(entry.get('id', entry.get('delivery_id', ''))))}</title>
+      <style>
+        body {{ font-family: Arial, sans-serif; background:#101114; color:#fff; padding:32px; }}
+        .wrap {{ max-width: 900px; margin: 0 auto; }}
+        h1 {{ color:#ff3333; }}
+        pre {{ background:#191d24; border:1px solid #333; border-radius:16px; padding:20px; white-space:pre-wrap; line-height:1.5; }}
+        .hint {{ color:#bbb; margin-bottom:20px; }}
+      </style>
+    </head>
+    <body>
+      <div class="wrap">
+        <h1>WISO Ãbergabe</h1>
+        <p class="hint">Diesen Datenblock im BÃ¼ro prÃ¼fen und in WISO Ã¼bernehmen.</p>
+        <pre>{html.escape(block)}</pre>
+      </div>
+    </body>
+    </html>
+    """
+    return doc.encode("utf-8")
+
+
+def wiso_handover() -> None:
+    st.markdown("## WISO Ãbergabe")
+    st.markdown(
+        "Hier kann das BÃ¼ro einen Wareneingang auswÃ¤hlen und die Daten direkt fÃ¼r WISO vorbereiten."
+    )
+
+    entries = current_entries()
+    if not entries:
+        st.info("Noch keine WareneingÃ¤nge vorhanden.")
+        return
+
+    search = st.text_input("Suchen", placeholder="Kunde, Lieferschein oder Artikelnummer")
+    filtered = entries
+    if search:
+        filtered = [e for e in entries if search.lower() in " ".join(map(str, e.values())).lower()]
+
+    if not filtered:
+        st.warning("Keine passenden WareneingÃ¤nge gefunden.")
+        return
+
+    labels = [
+        f"{e.get('id', e.get('delivery_id', ''))} Â· {e.get('customer', '')} Â· {e.get('article_no', '')}"
+        for e in filtered
+    ]
+    selected_label = st.selectbox("Wareneingang fÃ¼r WISO auswÃ¤hlen", labels)
+    selected_index = labels.index(selected_label)
+    entry = filtered[selected_index]
+
+    st.markdown("### Vorschau")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Kunde", entry.get("customer", "-"))
+    c2.metric("Artikel", entry.get("article_no", "-"))
+    c3.metric("Menge", entry.get("quantity", "-"))
+    c4.metric("Beschichtung", entry.get("coating", "-"))
+
+    st.markdown("### Copy/Paste Datenblock")
+    st.caption("Im Codefeld rechts oben auf Copy klicken und dann in WISO einfÃ¼gen.")
+    st.code(wiso_order_block(entry), language="text")
+
+    st.markdown("### Tabellarische WISO-Zeile")
+    df_one = pd.DataFrame([wiso_order_csv_row(entry)])
+    st.dataframe(df_one, use_container_width=True, hide_index=True)
+
+    col_a, col_b, col_c = st.columns(3)
+    col_a.download_button(
+        "CSV fÃ¼r diesen Auftrag",
+        data=df_one.to_csv(index=False, sep=";").encode("utf-8-sig"),
+        file_name=f"wiso_auftrag_{entry.get('id', entry.get('delivery_id', 'auftrag'))}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    col_b.download_button(
+        "HTML Bericht",
+        data=make_wiso_order_html(entry),
+        file_name=f"wiso_auftrag_{entry.get('id', entry.get('delivery_id', 'auftrag'))}.html",
+        mime="text/html",
+        use_container_width=True,
+    )
+
+    all_df = pd.DataFrame([wiso_order_csv_row(e) for e in filtered])
+    col_c.download_button(
+        "CSV alle Treffer",
+        data=all_df.to_csv(index=False, sep=";").encode("utf-8-sig"),
+        file_name="wiso_auftraege_aus_wareneingang.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+    st.markdown("### Bilder zum GegenprÃ¼fen")
+    img1, img2, img3 = st.columns(3)
+    with img1:
+        show_image_or_placeholder(entry.get("receipt_url", ""), "demo_lieferschein.png", "Lieferschein")
+    with img2:
+        show_image_or_placeholder(entry.get("parts_url", ""), "demo_bauteile.png", "Bauteile")
+    with img3:
+        show_image_or_placeholder(entry.get("packaging_url", ""), "demo_verpackung.png", "Verpackung")
+
+    st.markdown("### SpÃ¤tere API-Anbindung")
+    st.info(
+        "Dieser Bereich ist so vorbereitet, dass spÃ¤ter ein Button 'Direkt an WISO senden' ergÃ¤nzt werden kann, "
+        "falls eure WISO-Version eine passende API oder Import-Schnittstelle nutzt."
+    )
+
+
 def setup_help() -> None:
     st.markdown("## Supabase + OpenAI Setup")
 
@@ -1399,7 +1555,7 @@ def main() -> None:
 
     page = st.sidebar.radio(
         "Navigation",
-        ["Dashboard", "Neuer Wareneingang", "Archiv", "Buero / WISO", "KI-Suche", "Statistik", "Setup"],
+        ["Dashboard", "Neuer Wareneingang", "Archiv", "Buero / WISO", "WISO Ãbergabe", "KI-Suche", "Statistik", "Setup"],
     )
 
     if page == "Dashboard":
@@ -1410,6 +1566,8 @@ def main() -> None:
         archive()
     elif page == "Buero / WISO":
         office()
+    elif page == "WISO Ãbergabe":
+        wiso_handover()
     elif page == "KI-Suche":
         ai_search()
     elif page == "Statistik":
