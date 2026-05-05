@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import html
 import json
 import re
 from datetime import datetime
@@ -794,6 +795,149 @@ def entry_card(e: Dict, compact: bool = False) -> None:
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+
+def validate_entry(entry: Dict, has_receipt: bool, has_parts: bool, has_packaging: bool) -> list[str]:
+    errors = []
+
+    if not has_receipt:
+        errors.append("Lieferschein-Foto fehlt.")
+    if not has_parts:
+        errors.append("Bauteilfoto fehlt.")
+    if not has_packaging:
+        errors.append("Verpackungsfoto fehlt.")
+
+    if not str(entry.get("id", "")).strip():
+        errors.append("Lieferscheinnummer fehlt.")
+    if not str(entry.get("customer", "")).strip():
+        errors.append("Kunde fehlt.")
+    if not str(entry.get("article_no", "")).strip():
+        errors.append("Artikelnummer fehlt.")
+    if not str(entry.get("description", "")).strip():
+        errors.append("Artikelbezeichnung fehlt.")
+    if int(entry.get("quantity", 0) or 0) <= 0:
+        errors.append("Menge muss groesser als 0 sein.")
+
+    if entry.get("shape") == "Rund":
+        if float(entry.get("diameter", 0) or 0) <= 0:
+            errors.append("Bei rundem Bauteil muss der Durchmesser eingetragen sein.")
+        if float(entry.get("length", 0) or 0) <= 0:
+            errors.append("Bei rundem Bauteil muss die Laenge eingetragen sein.")
+    else:
+        if float(entry.get("length", 0) or 0) <= 0:
+            errors.append("Laenge muss eingetragen sein.")
+        if float(entry.get("width", 0) or 0) <= 0:
+            errors.append("Breite muss eingetragen sein.")
+        if float(entry.get("height", 0) or 0) <= 0:
+            errors.append("Hoehe muss eingetragen sein.")
+
+    if entry.get("coated") == "Ja" and entry.get("coating") in ["", "-", "Keine", None]:
+        errors.append("Beschichtung ist auf Ja gesetzt, aber keine Beschichtung ausgewaehlt.")
+
+    if entry.get("polished") == "Ja" and float(entry.get("polishing_price", 0) or 0) < 0:
+        errors.append("Polierpreis darf nicht negativ sein.")
+
+    return errors
+
+
+def make_entry_report_html(entry: Dict) -> bytes:
+    title = f"Wareneingang {entry.get('id', entry.get('delivery_id', ''))}"
+    rows = [
+        ("Lieferschein", entry.get("id", entry.get("delivery_id", ""))),
+        ("Datum", entry.get("date", "")),
+        ("Bediener", entry.get("operator", "")),
+        ("Kunde", entry.get("customer", "")),
+        ("Artikelnummer", entry.get("article_no", "")),
+        ("Artikelbezeichnung", entry.get("description", "")),
+        ("Menge", entry.get("quantity", "")),
+        ("Form", entry.get("shape", "")),
+        ("Masse", entry_dimensions(entry)),
+        ("Poliert", entry.get("polished", "")),
+        ("Polierpreis", f"{float(entry.get('polishing_price', 0) or 0):.2f} EUR"),
+        ("Beschichtet", entry.get("coated", "")),
+        ("Beschichtung", entry.get("coating", "")),
+        ("OCR Sicherheit", f"{entry.get('ocr_confidence', 0)}%"),
+        ("Hinweise", entry.get("notes", "")),
+    ]
+
+    row_html = "".join(
+        f"<tr><th>{html.escape(str(k))}</th><td>{html.escape(str(v))}</td></tr>"
+        for k, v in rows
+    )
+
+    image_blocks = ""
+    for label, key in [("Lieferschein", "receipt_url"), ("Bauteile", "parts_url"), ("Verpackung", "packaging_url")]:
+        url = entry.get(key, "")
+        if url:
+            image_blocks += f"""
+            <div class="imgbox">
+                <h2>{html.escape(label)}</h2>
+                <img src="{html.escape(url)}" />
+            </div>
+            """
+
+    doc = f"""
+    <!doctype html>
+    <html lang="de">
+    <head>
+      <meta charset="utf-8">
+      <title>{html.escape(title)}</title>
+      <style>
+        body {{ font-family: Arial, sans-serif; background:#101114; color:#fff; padding:32px; }}
+        .wrap {{ max-width: 980px; margin: 0 auto; }}
+        h1 {{ color:#ff3333; }}
+        table {{ width:100%; border-collapse:collapse; background:#191d24; border-radius:16px; overflow:hidden; }}
+        th, td {{ text-align:left; padding:12px 14px; border-bottom:1px solid #333; vertical-align:top; }}
+        th {{ width:220px; color:#bbb; }}
+        .imgbox {{ margin-top:24px; background:#191d24; border-radius:16px; padding:18px; }}
+        img {{ max-width:100%; border-radius:12px; border:1px solid #333; }}
+      </style>
+    </head>
+    <body>
+      <div class="wrap">
+        <h1>{html.escape(title)}</h1>
+        <table>{row_html}</table>
+        {image_blocks}
+      </div>
+    </body>
+    </html>
+    """
+    return doc.encode("utf-8")
+
+
+def statistics_page() -> None:
+    st.markdown("## Statistik")
+    entries = current_entries()
+
+    if not entries:
+        st.info("Noch keine Daten vorhanden.")
+        return
+
+    df = pd.DataFrame(entries)
+
+    total_entries = len(entries)
+    total_qty = sum(int(e.get("quantity", 0) or 0) for e in entries)
+    open_count = sum(1 for e in entries if e.get("status") != "Abgeschlossen")
+    coated_count = sum(1 for e in entries if e.get("coated") == "Ja")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Wareneingaenge", total_entries)
+    c2.metric("Bauteile gesamt", total_qty)
+    c3.metric("Offene Faelle", open_count)
+    c4.metric("Beschichtet", coated_count)
+
+    st.markdown("### Nach Bediener")
+    if "operator" in df.columns:
+        st.bar_chart(df["operator"].fillna("-").value_counts())
+
+    st.markdown("### Nach Beschichtung")
+    if "coating" in df.columns:
+        st.bar_chart(df["coating"].fillna("Keine").value_counts())
+
+    st.markdown("### Nach Kunde")
+    if "customer" in df.columns:
+        st.dataframe(df["customer"].fillna("-").value_counts().reset_index().rename(columns={"customer": "Kunde", "count": "Anzahl"}), use_container_width=True, hide_index=True)
+
+
 def dashboard() -> None:
     hero()
     metrics()
@@ -923,6 +1067,29 @@ def capture() -> None:
     if st.button("In Cloud speichern", use_container_width=True):
         user_email = st.session_state.user.email if st.session_state.user else "unbekannt"
 
+        entry_preview = {
+            "id": delivery_id,
+            "customer": customer,
+            "article_no": article_no,
+            "description": description,
+            "quantity": int(quantity),
+            "shape": shape,
+            "diameter": float(diameter),
+            "length": float(length),
+            "width": float(width),
+            "height": float(height),
+            "polished": polished,
+            "polishing_price": float(polishing_price),
+            "coated": coated,
+            "coating": coating,
+        }
+        validation_errors = validate_entry(entry_preview, receipt is not None, parts is not None, packaging is not None)
+        if validation_errors:
+            st.error("Bitte vor dem Speichern pruefen:")
+            for error in validation_errors:
+                st.warning(error)
+            st.stop()
+
         receipt_url = upload_to_storage(receipt, "lieferscheine")
         parts_url = upload_to_storage(parts, "bauteile")
         packaging_url = upload_to_storage(packaging, "verpackung")
@@ -964,13 +1131,48 @@ def capture() -> None:
 
 def archive() -> None:
     st.markdown("## Archiv")
-    q = st.text_input("Suche nach Kunde, Lieferschein, Artikelnummer oder Bediener")
     entries = current_entries()
-    if q:
-        entries = [e for e in entries if q.lower() in " ".join(map(str, e.values())).lower()]
-    for e in entries:
-        entry_card(e)
 
+    f1, f2, f3, f4 = st.columns(4)
+    q = f1.text_input("Suche", placeholder="Kunde, LS, Artikelnummer, Bediener")
+    customer_filter = f2.selectbox("Kunde", ["Alle"] + sorted({str(e.get("customer", "-")) for e in entries}))
+    operator_filter = f3.selectbox("Bediener", ["Alle"] + sorted({str(e.get("operator", "-")) for e in entries}))
+    status_filter = f4.selectbox("Status", ["Alle"] + sorted({str(e.get("status", "-")) for e in entries}))
+
+    filtered = entries
+
+    if q:
+        filtered = [e for e in filtered if q.lower() in " ".join(map(str, e.values())).lower()]
+    if customer_filter != "Alle":
+        filtered = [e for e in filtered if str(e.get("customer", "-")) == customer_filter]
+    if operator_filter != "Alle":
+        filtered = [e for e in filtered if str(e.get("operator", "-")) == operator_filter]
+    if status_filter != "Alle":
+        filtered = [e for e in filtered if str(e.get("status", "-")) == status_filter]
+
+    st.caption(f"{len(filtered)} Treffer")
+
+    for e in filtered:
+        with st.expander(f"{e.get('id', e.get('delivery_id', ''))} Â· {e.get('customer', '')} Â· {e.get('article_no', '')}", expanded=False):
+            entry_card(e, compact=False)
+
+            st.markdown("### Grosse Bildansicht")
+            tabs = st.tabs(["Lieferschein", "Bauteile", "Verpackung", "Bericht"])
+            with tabs[0]:
+                show_image_or_placeholder(e.get("receipt_url", ""), "demo_lieferschein.png", "Lieferschein")
+            with tabs[1]:
+                show_image_or_placeholder(e.get("parts_url", ""), "demo_bauteile.png", "Bauteile")
+            with tabs[2]:
+                show_image_or_placeholder(e.get("packaging_url", ""), "demo_verpackung.png", "Verpackung")
+            with tabs[3]:
+                report = make_entry_report_html(e)
+                st.download_button(
+                    "HTML-Bericht herunterladen",
+                    data=report,
+                    file_name=f"wareneingang_{e.get('id', e.get('delivery_id', 'bericht'))}.html",
+                    mime="text/html",
+                    key=f"report_{e.get('uuid', e.get('id', e.get('delivery_id', '')))}",
+                )
 
 def wiso_text(e: Dict) -> str:
     return "\t".join([
@@ -1060,11 +1262,11 @@ def ai_search() -> None:
         matches = st.session_state.get("part_ai_matches", [])
 
         if not matches:
-            st.info("Noch keine KI-Suche gestartet. Lade links ein Bauteilfoto hoch und starte die Suche.")
+            st.info("Noch keine KI-Suche gestartet. Lade links ein Bauteilfoto hoch und starte die Suche. Danach werden die besten Treffer angezeigt.")
             st.markdown('</div>', unsafe_allow_html=True)
             return
 
-        st.markdown("### Trefferliste")
+        st.markdown("### Top-Trefferliste")
 
         entry_by_id = {str(e.get("id", e.get("delivery_id", ""))): e for e in entries}
 
@@ -1197,7 +1399,7 @@ def main() -> None:
 
     page = st.sidebar.radio(
         "Navigation",
-        ["Dashboard", "Neuer Wareneingang", "Archiv", "Buero / WISO", "KI-Suche", "Setup"],
+        ["Dashboard", "Neuer Wareneingang", "Archiv", "Buero / WISO", "KI-Suche", "Statistik", "Setup"],
     )
 
     if page == "Dashboard":
@@ -1210,6 +1412,8 @@ def main() -> None:
         office()
     elif page == "KI-Suche":
         ai_search()
+    elif page == "Statistik":
+        statistics_page()
     else:
         setup_help()
 
