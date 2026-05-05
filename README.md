@@ -1,4 +1,6 @@
-# Pondruff / WE Cloud + Login Test
+# Pondruff / WE Cloud Storage Version
+
+Diese Version speichert Wareneingaenge in Supabase und Bilder in Supabase Storage.
 
 ## Streamlit Secrets
 
@@ -7,5 +9,5 @@ SUPABASE_URL = "https://DEIN-PROJEKT.supabase.co"
 SUPABASE_ANON_KEY = "DEIN-ANON-KEY"
 ```
 
-## Supabase SQL
-Die SQL-Anleitung ist auch direkt in der App unter "Supabase Setup" enthalten.
+## Supabase
+In der App gibt es eine Seite "Supabase Setup" mit SQL fuer Tabelle und Storage.
