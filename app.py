@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 APP_DIR = Path(__file__).parent
 ASSETS = APP_DIR / "assets"
 USERS = ["Kevin", "Tim", "Frank", "Julian", "Tobi", "Christian"]
+COATINGS = ["Meta-S", "CrN", "CrN-RB", "Duplex Meta cax", "AlCrN", "TiN", "TiaLN", "TiCN", "Keine"]
 
 
 def placeholder(path: Path, title: str, subtitle: str) -> None:
@@ -24,21 +25,24 @@ def placeholder(path: Path, title: str, subtitle: str) -> None:
         small = ImageFont.truetype("DejaVuSans.ttf", 34)
     except Exception:
         big = mid = small = ImageFont.load_default()
+
     d.rounded_rectangle((45, 45, 1555, 855), radius=48, fill=(18, 22, 28), outline=(210, 0, 0), width=5)
     d.text((90, 90), "Pondruff / WE", fill=(255, 255, 255), font=big)
     d.text((90, 220), "WARENEINGANGS-TOOL", fill=(230, 0, 0), font=mid)
     d.line((90, 300, 620, 300), fill=(230, 0, 0), width=7)
     d.text((90, 370), title, fill=(255, 255, 255), font=big)
     d.text((90, 500), subtitle, fill=(190, 198, 205), font=small)
-    labels = ["Lieferschein", "Bauteile", "Verpackung", "KI-Zuordnung"]
-    for i, label in enumerate(labels):
+
+    for i, label in enumerate(["Lieferschein", "Bauteile", "Verpackung", "KI-Zuordnung"]):
         y = 320 + i * 100
         d.rounded_rectangle((1040, y, 1460, y + 70), radius=20, fill=(29, 35, 44), outline=(230, 0, 0), width=3)
         d.text((1080, y + 18), label, fill=(255, 255, 255), font=small)
+
     img.save(path)
 
 
 def ensure_assets() -> None:
+    ASSETS.mkdir(parents=True, exist_ok=True)
     items = {
         "wareneingang.png": ("Digitaler Wareneingang mit KI", "Lieferschein erkennen. Bauteile spaeter per Foto zuordnen."),
         "demo_lieferschein.png": ("Lieferschein", "KI liest Kunde, Lieferant, Artikelnummer, Menge und Masse."),
@@ -62,8 +66,7 @@ def ensure_assets() -> None:
 
 
 def css() -> None:
-    st.markdown(
-        """
+    st.markdown("""
         <style>
         .stApp {background: radial-gradient(circle at top right, rgba(180,0,0,.25), transparent 30%), linear-gradient(135deg,#030405,#0b0f13 55%,#030405); color:white;}
         [data-testid="stSidebar"] {background:#060708; border-right:1px solid rgba(255,255,255,.12)}
@@ -87,9 +90,7 @@ def css() -> None:
         .stButton>button,.stDownloadButton>button {border-radius:14px!important; background:linear-gradient(180deg,#f01212,#b80000)!important; color:white!important; font-weight:800!important; border:1px solid rgba(229,9,9,.5)!important;}
         .stTextInput input,.stNumberInput input,.stTextArea textarea,.stSelectbox div[data-baseweb="select"]>div {background-color:rgba(255,255,255,.055)!important; color:white!important; border-color:rgba(255,255,255,.13)!important; border-radius:14px!important;}
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
+        """, unsafe_allow_html=True)
 
 
 def img_bytes(name: str) -> bytes:
@@ -105,7 +106,7 @@ def file_bytes(file) -> Optional[bytes]:
 
 
 def status_html(status: str) -> str:
-    css_class = "ok" if status in ["Abgeschlossen", "Gespeichert"] else "warn" if "Pruefung" in status or "PrÃ¼fung" in status else "bad"
+    css_class = "ok" if status in ["Abgeschlossen", "Gespeichert"] else "warn" if "Pruefung" in status else "bad"
     return f'<span class="status {css_class}">{status}</span>'
 
 
@@ -114,7 +115,6 @@ def ai_html(text: str) -> str:
 
 
 def fake_ocr(file=None) -> Dict:
-    """Demo-OCR. Spaeter hier echte KI/OCR anbinden."""
     return {
         "id": f"LS-{datetime.now().strftime('%Y')}-{datetime.now().strftime('%H%M%S')}",
         "customer": "Mustertechnik GmbH",
@@ -122,15 +122,23 @@ def fake_ocr(file=None) -> Dict:
         "article_no": "ART-123456",
         "description": "Praezisionsteil XY",
         "quantity": 25,
+        "shape": "Eckig",
+        "diameter": 0.0,
         "length": 120.50,
         "width": 80.25,
         "height": 45.00,
         "polished": "Ja",
+        "polishing_price": 25.00,
         "coated": "Ja",
-        "coating": "Harteloxal",
-        "layer": "Schwarz / 25 um",
+        "coating": "AlCrN",
         "confidence": 94,
     }
+
+
+def entry_dimensions(e: Dict) -> str:
+    if e.get("shape") == "Rund":
+        return f"Durchmesser {e.get('diameter', 0)} x Laenge {e.get('length', 0)} mm"
+    return f"{e.get('length', 0)} x {e.get('width', 0)} x {e.get('height', 0)} mm"
 
 
 def init_data() -> None:
@@ -142,17 +150,17 @@ def init_data() -> None:
             "id": "LS-2024-04578", "date": "24.05.2024, 09:15", "operator": "Kevin",
             "customer": "Mustertechnik GmbH", "supplier": "Elektronik Komponenten AG",
             "article_no": "ART-123456", "description": "Praezisionsteil XY", "quantity": 25,
-            "length": 120.50, "width": 80.25, "height": 45.00,
-            "polished": "Ja", "coated": "Ja", "coating": "Harteloxal", "layer": "Schwarz / 25 um",
+            "shape": "Eckig", "diameter": 0.0, "length": 120.50, "width": 80.25, "height": 45.00,
+            "polished": "Ja", "polishing_price": 25.00, "coated": "Ja", "coating": "AlCrN",
             "notes": "Keine Kanten brechen. Ware vollstaendig erfasst.", "status": "Abgeschlossen", "ocr_confidence": 94,
             "receipt_img": img_bytes("demo_lieferschein.png"), "parts_img": img_bytes("demo_bauteile.png"), "packaging_img": img_bytes("demo_verpackung.png"), "match": 92,
         },
         {
             "id": "LS-2024-04577", "date": "24.05.2024, 08:32", "operator": "Tim",
             "customer": "ABC Engineering", "supplier": "Fraesteile Nord GmbH",
-            "article_no": "ART-987654", "description": "Gehaeuseteil AB", "quantity": 10,
-            "length": 95.00, "width": 60.00, "height": 30.00,
-            "polished": "Nein", "coated": "Ja", "coating": "Pulverbeschichtung", "layer": "RAL 9005 / 80 um",
+            "article_no": "ART-987654", "description": "Runder Bolzen", "quantity": 10,
+            "shape": "Rund", "diameter": 20.00, "length": 150.00, "width": 0.0, "height": 0.0,
+            "polished": "Nein", "polishing_price": 0.00, "coated": "Ja", "coating": "CrN-RB",
             "notes": "Oberflaeche pruefen, kleiner Kratzer an Verpackung.", "status": "Pruefung offen", "ocr_confidence": 88,
             "receipt_img": img_bytes("demo_lieferschein.png"), "parts_img": img_bytes("demo_bauteile.png"), "packaging_img": img_bytes("demo_verpackung.png"), "match": 67,
         },
@@ -179,7 +187,12 @@ def metrics() -> None:
     open_count = sum(1 for e in entries if e["status"] != "Abgeschlossen")
     avg_ocr = round(sum(e.get("ocr_confidence", 0) for e in entries) / max(len(entries), 1))
     cols = st.columns(4)
-    data = [("Wareneingaenge", len(entries), "digital erfasst"), ("Bauteile", total_qty, "Stueck gesamt"), ("Offen", open_count, "zu pruefen"), ("OCR Ã", f"{avg_ocr}%", "KI-Erkennung")]
+    data = [
+        ("Wareneingaenge", len(entries), "digital erfasst"),
+        ("Bauteile", total_qty, "Stueck gesamt"),
+        ("Offen", open_count, "zu pruefen"),
+        ("OCR", f"{avg_ocr}%", "KI-Erkennung"),
+    ]
     for col, (label, value, hint) in zip(cols, data):
         col.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div><div class="metric-hint">{hint}</div></div>', unsafe_allow_html=True)
 
@@ -191,12 +204,13 @@ def entry_card(e: Dict, compact: bool = False) -> None:
     top[0].markdown(f"**{e['customer']}** Â· {e['date']} Â· Bediener: **{e.get('operator','-')}**")
     top[1].markdown(status_html(e["status"]), unsafe_allow_html=True)
     top[1].markdown(ai_html(f"OCR {e.get('ocr_confidence',0)}%"), unsafe_allow_html=True)
-    c = st.columns(5)
+    c = st.columns(6)
     c[0].metric("Artikel", e["article_no"])
     c[1].metric("Menge", f"{e['quantity']} Stk.")
-    c[2].metric("Masse", f"{e['length']} x {e['width']} x {e['height']}")
-    c[3].metric("Poliert", e["polished"])
-    c[4].metric("Schicht", e["coating"])
+    c[2].metric("Form", e.get("shape", "Eckig"))
+    c[3].metric("Masse", entry_dimensions(e))
+    c[4].metric("Polieren", f"{e.get('polished', 'Nein')} / {e.get('polishing_price', 0):.2f} EUR")
+    c[5].metric("Beschichtung", e.get("coating", "-"))
     if not compact:
         i1, i2, i3 = st.columns(3)
         i1.image(to_img(e["receipt_img"]), caption="Lieferschein", use_container_width=True)
@@ -222,9 +236,9 @@ def dashboard() -> None:
         st.markdown("""
         1. Lieferschein fotografieren  
         2. KI liest die Daten aus  
-        3. Bauteile fotografieren  
-        4. Verpackung fotografieren  
-        5. Mitarbeiter prueft die Daten  
+        3. Bauteile und Verpackung fotografieren  
+        4. Form auswaehlen: Eckig oder Rund  
+        5. Masse, Polierpreis und Beschichtung pruefen  
         6. Bediener auswaehlen und speichern  
         7. Buero kopiert Daten fuer WISO  
         8. Spaeter per Bauteilfoto wiederfinden
@@ -249,7 +263,7 @@ def capture() -> None:
 
     st.markdown('<div class="ai-box">', unsafe_allow_html=True)
     st.markdown("### 2. KI-Lieferschein-Erkennung")
-    st.write("Die Demo liest beispielhaft Daten aus dem Lieferschein und fuellt die Felder vor. In der echten Version kommt hier OCR/KI rein.")
+    st.write("Die Demo liest beispielhaft Daten aus dem Lieferschein und fuellt die Felder vor.")
     if st.button("KI: Lieferschein auslesen", use_container_width=True):
         st.session_state.ai_result = fake_ocr(receipt)
         st.success("KI-Auslesung abgeschlossen. Bitte unten gegenpruefen.")
@@ -274,14 +288,28 @@ def capture() -> None:
     with col2:
         description = st.text_input("Bezeichnung", value=d["description"])
         quantity = st.number_input("Menge", min_value=1, value=int(d["quantity"]), step=1)
-        length = st.number_input("Laenge (mm)", value=float(d["length"]))
-        width = st.number_input("Breite (mm)", value=float(d["width"]))
+        shape = st.radio("Bauteilform", ["Eckig", "Rund"], index=0 if d.get("shape") == "Eckig" else 1, horizontal=True)
+        if shape == "Rund":
+            diameter = st.number_input("Durchmesser (mm)", min_value=0.0, value=float(d.get("diameter", 0.0)), step=0.1)
+            length = st.number_input("Laenge (mm)", min_value=0.0, value=float(d.get("length", 0.0)), step=0.1)
+            width = 0.0
+            height = 0.0
+        else:
+            diameter = 0.0
+            length = st.number_input("Laenge (mm)", min_value=0.0, value=float(d.get("length", 0.0)), step=0.1)
+            width = st.number_input("Breite (mm)", min_value=0.0, value=float(d.get("width", 0.0)), step=0.1)
+            height = st.number_input("Hoehe (mm)", min_value=0.0, value=float(d.get("height", 0.0)), step=0.1)
     with col3:
-        height = st.number_input("Hoehe (mm)", value=float(d["height"]))
-        polished = st.radio("Poliert?", ["Ja", "Nein"], index=0 if d["polished"] == "Ja" else 1, horizontal=True)
-        coated = st.radio("Beschichtet?", ["Ja", "Nein"], index=0 if d["coated"] == "Ja" else 1, horizontal=True)
-        coating = st.selectbox("Beschichtung", ["Harteloxal", "Pulverbeschichtung", "Verzinkt", "Brueniert", "Keine"], index=0)
-        layer = st.selectbox("Farbe / Schichtdicke", ["Schwarz / 25 um", "RAL 9005 / 80 um", "Transparent / 15 um", "Silber / 20 um", "-"], index=0)
+        polished = st.radio("Poliert?", ["Ja", "Nein"], index=0 if d.get("polished") == "Ja" else 1, horizontal=True)
+        polishing_price = st.number_input("Preis Polieren (EUR)", min_value=0.0, value=float(d.get("polishing_price", 0.0)), step=1.0) if polished == "Ja" else 0.0
+        coated = st.radio("Beschichtet?", ["Ja", "Nein"], index=0 if d.get("coated") == "Ja" else 1, horizontal=True)
+        if coated == "Ja":
+            coating_options = COATINGS[:-1]
+            default_coating = d.get("coating", "AlCrN")
+            index = coating_options.index(default_coating) if default_coating in coating_options else 0
+            coating = st.selectbox("Beschichtung", coating_options, index=index)
+        else:
+            coating = "Keine"
     notes = st.text_area("Hinweise", value="Daten wurden per KI vorbereitet und vom Mitarbeiter geprueft.")
     operator = st.selectbox("Bediener auswaehlen", USERS, index=0)
 
@@ -296,8 +324,8 @@ def capture() -> None:
         st.session_state.entries.insert(0, {
             "id": delivery_id, "date": datetime.now().strftime("%d.%m.%Y, %H:%M"), "operator": operator,
             "customer": customer, "supplier": supplier, "article_no": article_no, "description": description,
-            "quantity": int(quantity), "length": float(length), "width": float(width), "height": float(height),
-            "polished": polished, "coated": coated, "coating": coating if coated == "Ja" else "-", "layer": layer if coated == "Ja" else "-",
+            "quantity": int(quantity), "shape": shape, "diameter": float(diameter), "length": float(length), "width": float(width), "height": float(height),
+            "polished": polished, "polishing_price": float(polishing_price), "coated": coated, "coating": coating,
             "notes": notes, "status": "Gespeichert", "ocr_confidence": int(d.get("confidence", 0)),
             "receipt_img": file_bytes(receipt) or img_bytes("demo_lieferschein.png"),
             "parts_img": file_bytes(parts) or img_bytes("demo_bauteile.png"),
@@ -320,14 +348,23 @@ def archive() -> None:
 
 
 def wiso_text(e: Dict) -> str:
-    return "\t".join([e["id"], e["date"], e.get("operator", "-"), e["customer"], e["supplier"], e["article_no"], e["description"], str(e["quantity"]), f"{e['length']} x {e['width']} x {e['height']} mm", e["polished"], e["coated"], e["coating"], e["layer"], e["notes"]])
+    return "\t".join([
+        e["id"], e["date"], e.get("operator", "-"), e["customer"], e["supplier"], e["article_no"], e["description"],
+        str(e["quantity"]), e.get("shape", "Eckig"), entry_dimensions(e), e["polished"], f"{e.get('polishing_price', 0):.2f}",
+        e["coated"], e["coating"], e["notes"]
+    ])
 
 
 def office() -> None:
     st.markdown("## Buero / WISO")
     rows = []
     for e in st.session_state.entries:
-        rows.append({"Lieferschein": e["id"], "Datum": e["date"], "Bediener": e.get("operator", "-"), "Kunde": e["customer"], "Artikelnummer": e["article_no"], "Menge": e["quantity"], "Masse": f"{e['length']} x {e['width']} x {e['height']} mm", "Beschichtung": e["coating"], "OCR": f"{e.get('ocr_confidence', 0)}%"})
+        rows.append({
+            "Lieferschein": e["id"], "Datum": e["date"], "Bediener": e.get("operator", "-"), "Kunde": e["customer"],
+            "Artikelnummer": e["article_no"], "Menge": e["quantity"], "Form": e.get("shape", "Eckig"), "Masse": entry_dimensions(e),
+            "Poliert": e.get("polished", "Nein"), "Polierpreis": f"{e.get('polishing_price', 0):.2f} EUR",
+            "Beschichtet": e.get("coated", "Nein"), "Beschichtung": e.get("coating", "Keine"), "OCR": f"{e.get('ocr_confidence', 0)}%"
+        })
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
     selected = st.selectbox("Datensatz fuer WISO auswaehlen", [e["id"] for e in st.session_state.entries])
@@ -343,7 +380,7 @@ def ai_search() -> None:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         uploaded = st.file_uploader("Foto vom unbekannten Bauteil", type=["png", "jpg", "jpeg"], key="ai_search")
         st.image(uploaded if uploaded else ASSETS / "demo_suchteil.png", caption="Suchbild", use_container_width=True)
-        start = st.button("KI-Suche starten", use_container_width=True)
+        st.button("KI-Suche starten", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
     with right:
         st.markdown('<div class="card">', unsafe_allow_html=True)
