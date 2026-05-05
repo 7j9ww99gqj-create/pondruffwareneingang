@@ -504,6 +504,127 @@ JSON Schema:
         return fake_ocr(uploaded_file)
 
 
+
+def image_bytes_to_data_url(uploaded_file) -> str:
+    image_bytes = uploaded_file.getvalue()
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+    content_type = uploaded_file.type or "image/jpeg"
+    return f"data:{content_type};base64,{image_base64}"
+
+
+def real_part_ai_search(search_file, entries: list[Dict]) -> list[Dict]:
+    """Vergleicht ein Suchfoto mit gespeicherten Bauteilfotos.
+
+    Hinweis:
+    Diese einfache Testversion nutzt GPT-4.1 Vision direkt.
+    Sie ist perfekt zum Testen mit wenigen Kandidaten.
+    Fuer grosse Datenmengen waere spaeter CLIP/Embeddings + Vektordatenbank besser.
+    """
+    if search_file is None:
+        st.warning("Bitte zuerst ein Foto vom unbekannten Bauteil hochladen.")
+        return []
+
+    candidates = [e for e in entries if e.get("parts_url")]
+    if not candidates:
+        st.warning("Noch keine gespeicherten Bauteilbilder in der Cloud gefunden. Bitte erst Wareneingaenge mit Bildern speichern.")
+        return []
+
+    if not openai_ready():
+        st.warning("OPENAI_API_KEY fehlt. Es wird die Demo-Trefferliste genutzt.")
+        return [
+            {
+                "id": e.get("id", e.get("delivery_id", "")),
+                "score": int(e.get("match", 70)),
+                "reason": "Demo-Treffer, da OpenAI API Key fehlt.",
+            }
+            for e in candidates[:5]
+        ]
+
+    try:
+        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+        limited = candidates[:6]
+        content = [
+            {
+                "type": "input_text",
+                "text": f"""
+Du bist ein KI-Assistent fuer Wareneingang und Bauteil-Zuordnung.
+
+Aufgabe:
+Vergleiche das erste Bild (Suchbild eines unbekannten Bauteils) mit den nachfolgenden Kandidatenbildern aus gespeicherten Wareneingaengen.
+
+Gib NUR gueltiges JSON zurueck, kein Markdown, keine Erklaerung.
+
+Bewerte:
+- Form/Kontur
+- Oberflaeche/Beschichtung
+- Farbe/Glanz
+- sichtbare Geometrie
+- allgemeine Aehnlichkeit
+
+JSON Schema:
+{{
+  "matches": [
+    {{
+      "id": "Lieferschein-ID aus der Kandidatenliste",
+      "score": 0,
+      "reason": "kurze Begruendung"
+    }}
+  ]
+}}
+
+Score:
+0 = passt gar nicht
+100 = sehr sicherer Treffer
+
+Kandidaten-IDs:
+{chr(10).join([f"- {e.get('id', e.get('delivery_id', ''))}: Kunde {e.get('customer','')}, Artikel {e.get('article_no','')}, Beschreibung {e.get('description','')}" for e in limited])}
+"""
+            },
+            {"type": "input_text", "text": "Suchbild:"},
+            {"type": "input_image", "image_url": image_bytes_to_data_url(search_file)},
+        ]
+
+        for e in limited:
+            content.append({"type": "input_text", "text": f"Kandidat {e.get('id', e.get('delivery_id', ''))}:"})
+            content.append({"type": "input_image", "image_url": e.get("parts_url")})
+
+        response = client.responses.create(
+            model="gpt-4.1",
+            input=[{"role": "user", "content": content}],
+        )
+
+        text = response.output_text.strip()
+        json_text = clean_json_text(text)
+        data = json.loads(json_text)
+        matches = data.get("matches", [])
+
+        clean_matches = []
+        valid_ids = {str(e.get("id", e.get("delivery_id", ""))) for e in limited}
+        for m in matches:
+            mid = str(m.get("id", ""))
+            if mid not in valid_ids:
+                continue
+            clean_matches.append({
+                "id": mid,
+                "score": max(0, min(100, safe_int(m.get("score"), 0))),
+                "reason": str(m.get("reason", "Aehnlichkeit erkannt.")),
+            })
+
+        return sorted(clean_matches, key=lambda x: x["score"], reverse=True)
+
+    except Exception as e:
+        st.error(f"Bauteil-KI fehlgeschlagen: {e}")
+        st.info("Es wird eine Demo-Trefferliste angezeigt.")
+        return [
+            {
+                "id": e.get("id", e.get("delivery_id", "")),
+                "score": int(e.get("match", 70)),
+                "reason": "Demo-Treffer nach Fehler in der KI-Auswertung.",
+            }
+            for e in candidates[:5]
+        ]
+
 def demo_entries() -> list[Dict]:
     return [
         {
@@ -904,23 +1025,80 @@ def office() -> None:
 
 
 def ai_search() -> None:
-    st.markdown("## KI-Suche")
-    left, right = st.columns([.85, 1.15])
+    st.markdown("## KI-Suche: Bauteilfoto zu Lieferschein zuordnen")
+    st.markdown(
+        "Lade ein Foto von einem unbekannten Bauteil hoch. GPT-4.1 vergleicht es mit den gespeicherten Bauteilbildern aus der Cloud."
+    )
+
+    left, right = st.columns([0.85, 1.15])
+
     with left:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         uploaded = st.file_uploader("Foto vom unbekannten Bauteil", type=["png", "jpg", "jpeg"], key="ai_search")
         st.image(uploaded if uploaded else ASSETS / "demo_suchteil.png", caption="Suchbild", use_container_width=True)
-        st.button("KI-Suche starten", use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    with right:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        entries = current_entries()
-        best = entries[0]
-        st.success(f"Bester Treffer: {best.get('id', best.get('delivery_id', ''))} - {best.get('customer', '')} - {best.get('match', 92)}%")
-        entry_card(best)
-        st.markdown("**Demo:** Echte Bauteil-Bildsuche kommt im naechsten Schritt.")
+        start = st.button("GPT-4.1 Bauteil-Zuordnung starten", use_container_width=True)
+        st.markdown(
+            """
+            **KI prÃ¼ft:**  
+            - Form und Kontur  
+            - OberflÃ¤che / Beschichtung  
+            - Farbe und Glanz  
+            - Ãhnlichkeit zu gespeicherten Bauteilfotos  
+            """
+        )
         st.markdown('</div>', unsafe_allow_html=True)
 
+    with right:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+
+        entries = current_entries()
+
+        if start:
+            with st.spinner("GPT-4.1 vergleicht das Bauteilfoto mit gespeicherten WareneingÃ¤ngen..."):
+                st.session_state.part_ai_matches = real_part_ai_search(uploaded, entries)
+
+        matches = st.session_state.get("part_ai_matches", [])
+
+        if not matches:
+            st.info("Noch keine KI-Suche gestartet. Lade links ein Bauteilfoto hoch und starte die Suche.")
+            st.markdown('</div>', unsafe_allow_html=True)
+            return
+
+        st.markdown("### Trefferliste")
+
+        entry_by_id = {str(e.get("id", e.get("delivery_id", ""))): e for e in entries}
+
+        for i, match in enumerate(matches, start=1):
+            entry = entry_by_id.get(str(match["id"]))
+            if not entry:
+                continue
+
+            score = int(match.get("score", 0))
+            if score >= 85:
+                st.success(f"Treffer {i}: {entry.get('id', entry.get('delivery_id', ''))} Â· {entry.get('customer', '')} Â· {score}%")
+            elif score >= 65:
+                st.warning(f"Treffer {i}: {entry.get('id', entry.get('delivery_id', ''))} Â· {entry.get('customer', '')} Â· {score}%")
+            else:
+                st.info(f"Treffer {i}: {entry.get('id', entry.get('delivery_id', ''))} Â· {entry.get('customer', '')} Â· {score}%")
+
+            st.write(f"**KI-BegrÃ¼ndung:** {match.get('reason', '')}")
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Artikel", entry.get("article_no", "-"))
+            c2.metric("Menge", f"{entry.get('quantity', 0)} Stk.")
+            c3.metric("Beschichtung", entry.get("coating", "-"))
+
+            img1, img2, img3 = st.columns(3)
+            with img1:
+                show_image_or_placeholder(entry.get("receipt_url", ""), "demo_lieferschein.png", "Lieferschein")
+            with img2:
+                show_image_or_placeholder(entry.get("parts_url", ""), "demo_bauteile.png", "Gespeichertes Bauteilfoto")
+            with img3:
+                show_image_or_placeholder(entry.get("packaging_url", ""), "demo_verpackung.png", "Verpackung")
+
+            st.markdown("---")
+
+        st.markdown('</div>', unsafe_allow_html=True)
 
 def setup_help() -> None:
     st.markdown("## Supabase + OpenAI Setup")
