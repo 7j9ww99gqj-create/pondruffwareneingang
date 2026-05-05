@@ -15,3 +15,10 @@ OPENAI_API_KEY = "sk-..."
 - Supabase Storage fuer Lieferschein, Bauteile und Verpackung
 - GPT-4.1 Lieferschein-OCR
 - WISO Copy/Paste
+
+
+## Neu: Bauteil-KI
+
+- Foto vom unbekannten Bauteil hochladen
+- GPT-4.1 vergleicht mit gespeicherten Bauteilbildern in Supabase Storage
+- Trefferliste mit Score und Begründung
