@@ -1,13 +1,7 @@
-# Pondruff / WE Cloud Storage Version
+# Pondruff / WE Cloud Storage
 
-Diese Version speichert Wareneingaenge in Supabase und Bilder in Supabase Storage.
-
-## Streamlit Secrets
-
-```toml
-SUPABASE_URL = "https://DEIN-PROJEKT.supabase.co"
-SUPABASE_ANON_KEY = "DEIN-ANON-KEY"
-```
-
-## Supabase
-In der App gibt es eine Seite "Supabase Setup" mit SQL fuer Tabelle und Storage.
+Geändert:
+- Lieferant entfernt
+- KI/OCR-Fokus auf Kunde, Artikelnummer, Artikelbezeichnung, Menge, Maße und Beschichtung
+- Beschichtung wird übernommen, wenn sie auf dem Lieferschein steht
+- Cloud Storage für Lieferschein, Bauteile und Verpackung bleibt enthalten
