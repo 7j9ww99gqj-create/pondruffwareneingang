@@ -1,7 +1,17 @@
-# Pondruff / WE Cloud Storage
+# Pondruff / WE Wareneingang Cloud + GPT-4.1
 
-Geändert:
-- Lieferant entfernt
-- KI/OCR-Fokus auf Kunde, Artikelnummer, Artikelbezeichnung, Menge, Maße und Beschichtung
-- Beschichtung wird übernommen, wenn sie auf dem Lieferschein steht
-- Cloud Storage für Lieferschein, Bauteile und Verpackung bleibt enthalten
+## Streamlit Secrets
+
+```toml
+SUPABASE_URL = "https://DEIN-PROJEKT.supabase.co"
+SUPABASE_ANON_KEY = "DEIN-ANON-KEY"
+OPENAI_API_KEY = "sk-..."
+```
+
+## Features
+
+- Supabase Login
+- Supabase Tabelle fuer Wareneingaenge
+- Supabase Storage fuer Lieferschein, Bauteile und Verpackung
+- GPT-4.1 Lieferschein-OCR
+- WISO Copy/Paste
