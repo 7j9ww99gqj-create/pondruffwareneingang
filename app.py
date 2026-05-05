@@ -45,7 +45,7 @@ def ensure_assets() -> None:
     ASSETS.mkdir(parents=True, exist_ok=True)
     items = {
         "wareneingang.png": ("Digitaler Wareneingang mit KI", "Cloud, Login, Bilder und spaeter echte KI."),
-        "demo_lieferschein.png": ("Lieferschein", "KI liest Kunde, Lieferant, Artikelnummer, Menge und Masse."),
+        "demo_lieferschein.png": ("Lieferschein", "KI liest Kunde, Artikelnummer, Artikelbezeichnung, Menge, MaÃe und Beschichtung."),
         "demo_bauteile.png": ("Bauteile", "Bauteile werden mit dem Wareneingang gespeichert."),
         "demo_verpackung.png": ("Verpackung", "Verpackungsmaterial bleibt als Nachweis erhalten."),
         "demo_suchteil.png": ("KI-Suchfoto", "Unbekanntes Bauteil fotografieren und zuordnen."),
@@ -181,12 +181,21 @@ def login_screen() -> None:
 
 
 def fake_ocr(file=None) -> Dict:
+    """Demo-OCR. SpÃ¤ter wird hier echte Lieferschein-KI/OCR angebunden.
+
+    Zielerkennung:
+    - Kunde
+    - Artikelnummer
+    - Artikelbezeichnung
+    - Menge
+    - MaÃe
+    - Beschichtung, falls auf dem Lieferschein vorhanden
+    """
     return {
         "id": f"LS-{datetime.now().strftime('%Y')}-{datetime.now().strftime('%H%M%S')}",
         "customer": "Mustertechnik GmbH",
-        "supplier": "Elektronik Komponenten AG",
         "article_no": "ART-123456",
-        "description": "Praezisionsteil XY",
+        "description": "PrÃ¤zisionsteil XY",
         "quantity": 25,
         "shape": "Eckig",
         "diameter": 0.0,
@@ -198,6 +207,7 @@ def fake_ocr(file=None) -> Dict:
         "coated": "Ja",
         "coating": "AlCrN",
         "confidence": 94,
+        "ocr_note": "Beschichtung AlCrN wurde auf dem Lieferschein erkannt.",
     }
 
 
@@ -408,8 +418,7 @@ def capture() -> None:
     with col1:
         delivery_id = st.text_input("Lieferscheinnummer", value=d["id"])
         customer = st.text_input("Kunde", value=d["customer"])
-        supplier = st.text_input("Lieferant", value=d["supplier"])
-        article_no = st.text_input("Artikelnummer", value=d["article_no"])
+                article_no = st.text_input("Artikelnummer", value=d["article_no"])
     with col2:
         description = st.text_input("Bezeichnung", value=d["description"])
         quantity = st.number_input("Menge", min_value=1, value=int(d["quantity"]), step=1)
@@ -453,7 +462,7 @@ def capture() -> None:
             packaging_url = upload_file_to_storage(packaging, delivery_id, "verpackung")
         entry = {
             "delivery_id": delivery_id, "id": delivery_id, "date": datetime.now().strftime("%d.%m.%Y, %H:%M"),
-            "operator": operator, "customer": customer, "supplier": supplier, "article_no": article_no, "description": description,
+            "operator": operator, "customer": customer, "supplier": "article_no": article_no, "description": description,
             "quantity": int(quantity), "shape": shape, "diameter": float(diameter), "length": float(length), "width": float(width), "height": float(height),
             "polished": polished, "polishing_price": float(polishing_price), "coated": coated, "coating": coating,
             "notes": notes, "status": "Gespeichert", "ocr_confidence": int(d.get("confidence", 0)), "match": 92,
@@ -524,8 +533,7 @@ create table if not exists wareneingaenge (
   date text,
   operator text,
   customer text,
-  supplier text,
-  article_no text,
+    article_no text,
   description text,
   quantity int,
   shape text,
