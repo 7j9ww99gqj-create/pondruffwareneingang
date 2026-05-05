@@ -378,7 +378,7 @@ def main() -> None:
     ensure_assets()
     css()
     init_data()
-    st.sidebar.image(ASSETS / "wareneingang.png", use_container_width=True)
+    st.sidebar.image(ASSETS / "sidebar.png", use_container_width=True)
     st.sidebar.markdown("### Pondruff / WE")
     page = st.sidebar.radio("Navigation", ["Dashboard", "Neuer Wareneingang", "Archiv", "Buero / WISO", "KI-Suche", "Praesentation", "Technik"])
     if page == "Dashboard": dashboard()
