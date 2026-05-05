@@ -22,3 +22,13 @@ OPENAI_API_KEY = "sk-..."
 - Foto vom unbekannten Bauteil hochladen
 - GPT-4.1 vergleicht mit gespeicherten Bauteilbildern in Supabase Storage
 - Trefferliste mit Score und Begründung
+
+
+## Plus 6 Update
+
+1. Pflicht- und Plausibilitaetspruefung vor dem Speichern
+2. Verbessertes Archiv mit grosser Bildansicht
+3. KI Top-Trefferliste
+4. Filter nach Suche, Kunde, Bediener und Status
+5. HTML-Bericht pro Wareneingang zum Download
+6. Statistikseite mit Auswertungen
