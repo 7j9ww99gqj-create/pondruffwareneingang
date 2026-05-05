@@ -32,3 +32,14 @@ OPENAI_API_KEY = "sk-..."
 4. Filter nach Suche, Kunde, Bediener und Status
 5. HTML-Bericht pro Wareneingang zum Download
 6. Statistikseite mit Auswertungen
+
+
+## WISO Übergabe
+
+Neuer Bereich:
+- Wareneingang auswählen
+- WISO-Datenblock kopieren
+- CSV für einzelnen Auftrag herunterladen
+- CSV für mehrere Treffer herunterladen
+- HTML-Auftragsbericht herunterladen
+- Bilder direkt gegenprüfen
