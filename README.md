@@ -1,15 +1,11 @@
-# Pondruff / WE Wareneingangs-Tool Demo
+# Pondruff / WE Cloud + Login Test
 
-Start:
+## Streamlit Secrets
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
+```toml
+SUPABASE_URL = "https://DEIN-PROJEKT.supabase.co"
+SUPABASE_ANON_KEY = "DEIN-ANON-KEY"
 ```
 
-Funktionen:
-- 3 Fotos: Lieferschein, Bauteile, Verpackung
-- KI-Lieferschein-Erkennung als Demo
-- automatische Datenuebernahme + Gegenpruefung
-- Bediener-Auswahl: Kevin, Tim, Frank, Julian, Tobi, Christian
-- Archiv, Buero/WISO Copy-Paste, KI-Suche
+## Supabase SQL
+Die SQL-Anleitung ist auch direkt in der App unter "Supabase Setup" enthalten.
