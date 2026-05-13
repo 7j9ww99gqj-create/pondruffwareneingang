@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
 from supabase import create_client, Client
 
@@ -557,6 +558,7 @@ def blank_price_position(shape: str = "Eckig") -> Dict:
     return {
         "description": "",
         "article_no": "",
+        "position_no": "",
         "order_no": "",
         "cost_center": "",
         "purchase_order": "",
@@ -579,6 +581,7 @@ def normalize_price_position(data: Dict) -> Dict:
     coating = normalize_price_coating(str(data.get("coating") or data.get("beschichtung") or pos["coating"]))
     pos["description"] = str(data.get("description") or data.get("article_description") or data.get("artikelbezeichnung") or "").strip()
     pos["article_no"] = str(data.get("article_no") or data.get("artikelnummer") or "").strip()
+    pos["position_no"] = str(data.get("position_no") or data.get("positionsnummer") or data.get("pos_nr") or data.get("pos") or "").strip()
     pos["order_no"] = str(data.get("order_no") or data.get("auftragsnummer") or data.get("auftrag") or "").strip()
     pos["cost_center"] = str(data.get("cost_center") or data.get("kostenstelle") or "").strip()
     pos["purchase_order"] = str(data.get("purchase_order") or data.get("bestellnummer") or data.get("bestell_nr") or "").strip()
@@ -657,10 +660,15 @@ def price_dimension_text(pos: Dict) -> str:
     return f"{length:g} x {width:g} x {height:g} mm"
 
 
+def money_de(value: float) -> str:
+    return f"{money(value):.2f}".replace(".", ",")
+
+
 def wiso_description_for_price_position(pos: Dict, is_first: bool, global_purchase_order: str = "") -> str:
     description = pos.get("description") or "Beschichtung"
     coating = normalize_price_coating(pos.get("coating", "TiCN"))
-    lines = [f"{description} {price_dimension_text(pos)}, {coating} beschichtet"]
+    position_part = f" Pos. {pos['position_no']}" if pos.get("position_no") else ""
+    lines = [f"{description} {price_dimension_text(pos)}{position_part}, {coating} beschichtet."]
 
     if pos.get("order_no"):
         lines.append(f"Auftrags.-Nr. {pos['order_no']}")
@@ -680,19 +688,23 @@ def build_wiso_price_order(customer: str, project: str, positions: list[Dict], g
 
     for idx, pos in enumerate(clean_positions, start=1):
         result = calc_price_position(pos)
+        quantity = safe_int(pos.get("quantity"), 1)
+        single_after_discount = money(result["final_total"] / max(quantity, 1))
         rows.append(
             {
                 "Pos.": f"{idx:02d}",
-                "Menge": safe_int(pos.get("quantity"), 1),
+                "Menge": quantity,
                 "Artikel-Nr.": pos.get("article_no", ""),
-                "Einheit": "Stk.",
+                "Einheit": "",
                 "Beschreibung": wiso_description_for_price_position(
                     pos,
                     is_first=idx == 1,
                     global_purchase_order=global_purchase_order,
                 ),
+                "Liefertermin": "",
+                "Listenpreis": f"{result['unit_price']:.2f}",
                 "Rabatt (%)": f"{safe_float(pos.get('discount'), 0.0):g}",
-                "Einzelpreis": f"{result['unit_price']:.2f}",
+                "Einzelpreis": f"{single_after_discount:.2f}",
                 "Gesamtpreis": f"{result['final_total']:.2f}",
             }
         )
@@ -712,11 +724,69 @@ def build_wiso_price_order(customer: str, project: str, positions: list[Dict], g
 
 
 def wiso_order_tsv(order: Dict) -> str:
-    headers = ["Pos.", "Menge", "Artikel-Nr.", "Einheit", "Beschreibung", "Rabatt (%)", "Einzelpreis", "Gesamtpreis"]
+    headers = ["Pos.", "Menge", "Artikel-Nr.", "Einheit", "Beschreibung", "Liefertermin", "Listenpreis", "Rabatt (%)", "Einzelpreis", "Gesamtpreis"]
     lines = ["\t".join(headers)]
     for row in order.get("rows", []):
         lines.append("\t".join(str(row.get(header, "")) for header in headers))
     return "\n".join(lines)
+
+
+def tsv_cell(value) -> str:
+    text = str(value if value is not None else "").replace("\r\n", "\n").replace("\r", "\n")
+    if any(ch in text for ch in ['\t', '\n', '"']):
+        return '"' + text.replace('"', '""') + '"'
+    return text
+
+
+def wiso_clipboard_tsv(order: Dict) -> str:
+    columns = ["Menge", "Artikel-Nr.", "Einheit", "Beschreibung", "Liefertermin", "Listenpreis", "Rabatt (%)", "Einzelpreis", "Gesamtpreis"]
+    lines = []
+    for row in order.get("rows", []):
+        values = []
+        for column in columns:
+            value = row.get(column, "")
+            if column in ["Listenpreis", "Einzelpreis", "Gesamtpreis"]:
+                value = str(value).replace(".", ",")
+            values.append(tsv_cell(value))
+        lines.append("\t".join(values))
+    return "\r\n".join(lines)
+
+
+def wiso_copy_button(order: Dict, key: str) -> None:
+    payload = json.dumps(wiso_clipboard_tsv(order))
+    components.html(
+        f"""
+        <button id="copy-{key}" style="
+          width:100%;
+          min-height:44px;
+          border-radius:14px;
+          border:1px solid rgba(229,9,9,.5);
+          background:linear-gradient(180deg,#f01212,#b80000);
+          color:white;
+          font-weight:800;
+          cursor:pointer;
+        ">WISO Copy</button>
+        <script>
+        const btn = document.getElementById("copy-{key}");
+        const text = {payload};
+        btn.addEventListener("click", async () => {{
+          try {{
+            await navigator.clipboard.writeText(text);
+            btn.textContent = "WISO Daten kopiert";
+          }} catch (err) {{
+            const area = document.createElement("textarea");
+            area.value = text;
+            document.body.appendChild(area);
+            area.select();
+            document.execCommand("copy");
+            area.remove();
+            btn.textContent = "WISO Daten kopiert";
+          }}
+        }});
+        </script>
+        """,
+        height=56,
+    )
 
 
 def load_wiso_price_orders() -> list[Dict]:
@@ -931,7 +1001,7 @@ Ziel:
 - Lies die Bilder nacheinander und fuehre die erkannten Positionen in einem gemeinsamen Array zusammen.
 - Jede Position soll fuer den Preisrechner vorbereitet werden.
 - Wenn Dokumente mehrere Positionen enthalten, gib mehrere Eintraege im Array "positions" zurueck.
-- Erkenne je Position Artikelnummer, Auftragsnummer, Kostenstelle und Bestellnummer, falls vorhanden.
+- Erkenne je Position Artikelnummer, Positionsnummer, Auftragsnummer, Kostenstelle und Bestellnummer, falls vorhanden.
 - Falls eine Bestellnummer nur global auf dem Dokument steht, gib sie oben als purchase_order zurueck.
 
 Regeln:
@@ -956,6 +1026,7 @@ JSON Schema:
     {{
       "description": "string",
       "article_no": "string",
+      "position_no": "string",
       "order_no": "string",
       "cost_center": "string",
       "purchase_order": "string",
@@ -1719,6 +1790,7 @@ def office() -> None:
             df_order = pd.DataFrame(selected_order.get("rows", []))
             st.dataframe(df_order, use_container_width=True, hide_index=True)
             st.caption("Diesen Tab-Block kannst du direkt markieren/kopieren und in WISO als Positionsdaten weiterverwenden.")
+            wiso_copy_button(selected_order, key="office")
             st.code(wiso_order_tsv(selected_order), language="text")
             st.download_button(
                 "Auftrag als CSV exportieren",
@@ -2155,19 +2227,22 @@ def price_calculator_page() -> None:
 
         row3 = st.columns(3)
         pos["discount"] = row3[0].number_input("Rabatt %", min_value=0.0, max_value=100.0, value=float(pos["discount"]), step=1.0, key=f"price_discount_{idx}")
-        pos["order_no"] = row3[1].text_input("Auftrags.-Nr.", value=pos.get("order_no", ""), key=f"price_order_no_{idx}")
-        pos["cost_center"] = row3[2].text_input("Kostenstelle", value=pos.get("cost_center", ""), key=f"price_cost_center_{idx}")
+        pos["position_no"] = row3[1].text_input("Positionsnummer", value=pos.get("position_no", ""), key=f"price_position_no_{idx}")
+        pos["order_no"] = row3[2].text_input("Auftrags.-Nr.", value=pos.get("order_no", ""), key=f"price_order_no_{idx}")
 
         row4 = st.columns(3)
+        pos["cost_center"] = row4[0].text_input("Kostenstelle", value=pos.get("cost_center", ""), key=f"price_cost_center_{idx}")
         if idx == 0:
-            pos["purchase_order"] = row4[0].text_input("Bestell.-Nr.", value=pos.get("purchase_order", "") or st.session_state.price_purchase_order, key=f"price_purchase_order_pos_{idx}")
+            pos["purchase_order"] = row4[1].text_input("Bestell.-Nr.", value=pos.get("purchase_order", "") or st.session_state.price_purchase_order, key=f"price_purchase_order_pos_{idx}")
             st.session_state.price_purchase_order = pos["purchase_order"]
         else:
             pos["purchase_order"] = ""
-            row4[0].caption("Bestell.-Nr. wird nur bei Position 1 gefuehrt.")
-        pos["note"] = row4[1].text_input("Notiz", value=pos["note"], key=f"price_note_{idx}")
+            row4[1].caption("Bestell.-Nr. wird nur bei Position 1 gefuehrt.")
+
+        row5 = st.columns(3)
+        pos["note"] = row5[0].text_input("Notiz", value=pos["note"], key=f"price_note_{idx}")
         default_factor = price_default_factor(pos["coating"])
-        row4[2].caption(f"Standardfaktor fuer {pos['coating']}: {default_factor:.2f}")
+        row5[1].caption(f"Standardfaktor fuer {pos['coating']}: {default_factor:.2f}")
 
         result = calc_price_position(pos)
         total_normal += result["normal_total"]
@@ -2244,6 +2319,7 @@ def price_calculator_page() -> None:
     )
     st.markdown("### WISO-Vorschau")
     st.dataframe(pd.DataFrame(wiso_order["rows"]), use_container_width=True, hide_index=True)
+    wiso_copy_button(wiso_order, key="price")
     st.code(wiso_order_tsv(wiso_order), language="text")
     if st.button("Start: WISO-Auftrag speichern", use_container_width=True):
         save_wiso_price_order(wiso_order)
