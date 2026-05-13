@@ -505,6 +505,17 @@ def safe_int(value, default: int = 1) -> int:
         return default
 
 
+def safe_count(value, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            value = value.replace(",", ".").strip()
+        return max(0, int(float(value)))
+    except Exception:
+        return default
+
+
 def price_default_factor(coating: str) -> float:
     return float(PRICE_COATING_FACTORS.get(coating, 1.0))
 
@@ -641,6 +652,11 @@ def calc_price_position(pos: Dict) -> Dict:
 def normalize_price_ocr_result(data: Dict) -> Dict:
     positions = data.get("positions") or data.get("items") or []
     clean_positions = [normalize_price_position(pos) for pos in positions if isinstance(pos, dict)]
+    detected_position_count = safe_count(data.get("detected_position_count"), len(clean_positions))
+    detected_coating_count = safe_count(
+        data.get("detected_coating_count"),
+        sum(1 for pos in clean_positions if normalize_price_coating(pos.get("coating", "TiCN")) != "Keine"),
+    )
     return {
         "delivery_id": str(data.get("delivery_id") or data.get("id") or "").strip(),
         "customer": normalize_price_customer(str(data.get("customer") or "")),
@@ -648,6 +664,13 @@ def normalize_price_ocr_result(data: Dict) -> Dict:
         "purchase_order": str(data.get("purchase_order") or data.get("bestellnummer") or data.get("bestell_nr") or "").strip(),
         "confidence": max(0, min(100, safe_int(data.get("confidence"), 80))),
         "ocr_note": str(data.get("ocr_note") or data.get("note") or "GPT-4.1 hat die Positionen fuer den Preisrechner vorbereitet.").strip(),
+        "detected_position_count": detected_position_count,
+        "detected_coating_count": detected_coating_count,
+        "detected_polishing_count": safe_count(data.get("detected_polishing_count"), 0),
+        "detected_polishing_price_count": safe_count(data.get("detected_polishing_price_count"), 0),
+        "detected_stripping_count": safe_count(data.get("detected_stripping_count"), 0),
+        "detected_stripping_price_count": safe_count(data.get("detected_stripping_price_count"), 0),
+        "validation_notes": [str(note).strip() for note in (data.get("validation_notes") or []) if str(note).strip()],
         "positions": clean_positions,
     }
 
@@ -1431,6 +1454,12 @@ def real_ocr_price_positions(uploaded_files) -> Dict:
                 "purchase_order": "B-2026-001",
                 "confidence": 70,
                 "ocr_note": "Demo-Erkennung: API-Key fehlt. Bitte Werte pruefen.",
+                "detected_position_count": 1,
+                "detected_coating_count": 1,
+                "detected_polishing_count": 0,
+                "detected_polishing_price_count": 0,
+                "detected_stripping_count": 0,
+                "detected_stripping_price_count": 0,
                 "positions": [
                     {
                         "description": "Demo Rundteil",
@@ -1466,6 +1495,11 @@ Ziel:
 - Wenn Dokumente mehrere Positionen enthalten, gib mehrere Eintraege im Array "positions" zurueck.
 - Erkenne je Position Artikelnummer, Positionsnummer, Auftragsnummer, Kostenstelle und Bestellnummer, falls vorhanden.
 - Falls eine Bestellnummer nur global auf dem Dokument steht, gib sie oben als purchase_order zurueck.
+- Erkenne handschriftliche Leistungen wie "Pol35" oder "Ent20".
+- "Pol35" bedeutet Polieren mit erkanntem Preis 35.
+- "Ent20" bedeutet Entschichten mit erkanntem Preis 20.
+- Zaehle mit, wie viele Positionen, Beschichtungen, Polieren und Entschichten du im Dokument wirklich erkannt hast.
+- Zaehle separat, bei wie vielen Polieren- oder Entschichten-Eintraegen auch wirklich ein Preis lesbar ist.
 
 Regeln:
 - Fuer runde Teile nutze shape = "Rund" und fuelle diameter + length.
@@ -1485,6 +1519,13 @@ JSON Schema:
   "purchase_order": "string",
   "confidence": 0,
   "ocr_note": "string",
+  "detected_position_count": 0,
+  "detected_coating_count": 0,
+  "detected_polishing_count": 0,
+  "detected_polishing_price_count": 0,
+  "detected_stripping_count": 0,
+  "detected_stripping_price_count": 0,
+  "validation_notes": ["string"],
   "positions": [
     {{
       "description": "string",
@@ -1534,6 +1575,94 @@ def image_bytes_to_data_url(uploaded_file) -> str:
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
     content_type = uploaded_file.type or "image/jpeg"
     return f"data:{content_type};base64,{image_base64}"
+
+
+def expected_price_checks() -> Dict:
+    return {
+        "positions": safe_count(st.session_state.get("price_expected_positions"), 0),
+        "coatings": safe_count(st.session_state.get("price_expected_coatings"), 0),
+        "polishing": safe_count(st.session_state.get("price_expected_polishing"), 0),
+        "stripping": safe_count(st.session_state.get("price_expected_stripping"), 0),
+    }
+
+
+def detected_price_checks(ai_result: Optional[Dict], positions: list[Dict]) -> Dict:
+    clean_positions = [normalize_price_position(pos) for pos in positions]
+    if not ai_result:
+        return {
+            "positions": len(clean_positions),
+            "coatings": sum(1 for pos in clean_positions if normalize_price_coating(pos.get("coating", "TiCN")) != "Keine"),
+            "polishing": 0,
+            "polishing_prices": 0,
+            "stripping": 0,
+            "stripping_prices": 0,
+            "notes": [],
+        }
+
+    return {
+        "positions": safe_count(ai_result.get("detected_position_count"), len(clean_positions)),
+        "coatings": safe_count(
+            ai_result.get("detected_coating_count"),
+            sum(1 for pos in clean_positions if normalize_price_coating(pos.get("coating", "TiCN")) != "Keine"),
+        ),
+        "polishing": safe_count(ai_result.get("detected_polishing_count"), 0),
+        "polishing_prices": safe_count(ai_result.get("detected_polishing_price_count"), 0),
+        "stripping": safe_count(ai_result.get("detected_stripping_count"), 0),
+        "stripping_prices": safe_count(ai_result.get("detected_stripping_price_count"), 0),
+        "notes": [str(note).strip() for note in (ai_result.get("validation_notes") or []) if str(note).strip()],
+    }
+
+
+def build_price_validation(expected: Dict, detected: Dict, ai_result: Optional[Dict]) -> Dict:
+    soft_issues = []
+    hard_issues = []
+
+    if not ai_result:
+        return {
+            "soft_issues": soft_issues,
+            "hard_issues": hard_issues,
+            "requires_approval": False,
+            "can_save": True,
+        }
+
+    comparisons = [
+        ("Positionen", expected["positions"], detected["positions"]),
+        ("Beschichtungen", expected["coatings"], detected["coatings"]),
+        ("Polieren", expected["polishing"], detected["polishing"]),
+        ("Entschichten", expected["stripping"], detected["stripping"]),
+    ]
+    for label, expected_value, detected_value in comparisons:
+        if expected_value != detected_value:
+            soft_issues.append(
+                f"Du hast {expected_value} {label.lower()} angegeben, ich habe aber {detected_value} erkannt."
+            )
+
+    if expected["polishing"] > 0 and detected["polishing"] == 0:
+        hard_issues.append("Du hast Polieren angegeben, ich habe aber kein Polieren auf dem Dokument erkannt.")
+    if expected["polishing"] > detected["polishing_prices"]:
+        hard_issues.append(
+            f"Du hast {expected['polishing']} mal Polieren angegeben, aber ich habe nur {detected['polishing_prices']} Polier-Preis(e) erkannt."
+        )
+
+    if expected["stripping"] > 0 and detected["stripping"] == 0:
+        hard_issues.append("Du hast Entschichten angegeben, ich habe aber kein Entschichten auf dem Dokument erkannt.")
+    if expected["stripping"] > detected["stripping_prices"]:
+        hard_issues.append(
+            f"Du hast {expected['stripping']} mal Entschichten angegeben, aber ich habe nur {detected['stripping_prices']} Entschicht-Preis(e) erkannt."
+        )
+
+    for note in detected.get("notes", []):
+        soft_issues.append(note)
+
+    requires_approval = bool(soft_issues) and not hard_issues
+    approved = bool(st.session_state.get("price_validation_approved", False))
+    can_save = not hard_issues and (not requires_approval or approved)
+    return {
+        "soft_issues": soft_issues,
+        "hard_issues": hard_issues,
+        "requires_approval": requires_approval,
+        "can_save": can_save,
+    }
 
 
 def real_part_ai_search(search_file, entries: list[Dict]) -> list[Dict]:
@@ -1757,6 +1886,16 @@ def init_data() -> None:
         st.session_state.price_manual_mode = False
     if "price_global_discount" not in st.session_state:
         st.session_state.price_global_discount = 0.0
+    if "price_expected_positions" not in st.session_state:
+        st.session_state.price_expected_positions = 0
+    if "price_expected_coatings" not in st.session_state:
+        st.session_state.price_expected_coatings = 0
+    if "price_expected_polishing" not in st.session_state:
+        st.session_state.price_expected_polishing = 0
+    if "price_expected_stripping" not in st.session_state:
+        st.session_state.price_expected_stripping = 0
+    if "price_validation_approved" not in st.session_state:
+        st.session_state.price_validation_approved = False
 
 
 def current_entries() -> list[Dict]:
@@ -2537,9 +2676,13 @@ def wiso_handover() -> None:
 
 def price_calculator_page() -> None:
     st.markdown("## Preis Rechner")
+    st.info(
+        "REGELN: Polierpreise handschriftlich auf dem LS/Pos notieren mit Pol + Preis z. B. Pol35. "
+        "Entschichten bitte mit Ent + Preis z. B. Ent20. Bitte in die Tabelle Dienstleistung/Pos. eintragen."
+    )
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    top_left, top_right = st.columns([1.2, 0.8])
+    top_left, top_middle, top_right = st.columns([1.15, 0.9, 0.75])
 
     with top_left:
         uploaded_files = st.file_uploader(
@@ -2580,12 +2723,45 @@ def price_calculator_page() -> None:
                     st.session_state.price_project = result["delivery_id"]
                 if result.get("purchase_order"):
                     st.session_state.price_purchase_order = result["purchase_order"]
+                st.session_state.price_validation_approved = False
             st.rerun()
+
+    with top_middle:
+        st.markdown("### Prueftabelle")
+        st.session_state.price_expected_positions = st.number_input(
+            "Positionen",
+            min_value=0,
+            step=1,
+            value=int(st.session_state.get("price_expected_positions", 0)),
+            key="price_expected_positions_input",
+        )
+        st.session_state.price_expected_coatings = st.number_input(
+            "Beschichtungen",
+            min_value=0,
+            step=1,
+            value=int(st.session_state.get("price_expected_coatings", 0)),
+            key="price_expected_coatings_input",
+        )
+        st.session_state.price_expected_polishing = st.number_input(
+            "Polieren",
+            min_value=0,
+            step=1,
+            value=int(st.session_state.get("price_expected_polishing", 0)),
+            key="price_expected_polishing_input",
+        )
+        st.session_state.price_expected_stripping = st.number_input(
+            "Entschichten",
+            min_value=0,
+            step=1,
+            value=int(st.session_state.get("price_expected_stripping", 0)),
+            key="price_expected_stripping_input",
+        )
 
     with top_right:
         if st.button("Preise manuell eintragen", use_container_width=True):
             st.session_state.price_manual_mode = True
             st.session_state.price_ai_result = None
+            st.session_state.price_validation_approved = False
             if not st.session_state.price_positions:
                 st.session_state.price_positions = [blank_price_position("Eckig")]
             st.rerun()
@@ -2747,6 +2923,10 @@ def price_calculator_page() -> None:
         st.rerun()
 
     st.session_state.price_positions = updated_positions
+    ai = st.session_state.get("price_ai_result")
+    expected_checks = expected_price_checks()
+    detected_checks = detected_price_checks(ai, updated_positions)
+    validation = build_price_validation(expected_checks, detected_checks, ai)
 
     discount_sum = money(total_normal - total_final)
     net = money(total_final)
@@ -2783,6 +2963,34 @@ def price_calculator_page() -> None:
     )
     st.code(summary_text, language="text")
 
+    if ai:
+        st.markdown("### Pruefung vor dem Speichern")
+        check_df = pd.DataFrame(
+            [
+                {"Thema": "Positionen", "Du sagst": expected_checks["positions"], "KI erkannt": detected_checks["positions"]},
+                {"Thema": "Beschichtungen", "Du sagst": expected_checks["coatings"], "KI erkannt": detected_checks["coatings"]},
+                {"Thema": "Polieren", "Du sagst": expected_checks["polishing"], "KI erkannt": detected_checks["polishing"]},
+                {"Thema": "Entschichten", "Du sagst": expected_checks["stripping"], "KI erkannt": detected_checks["stripping"]},
+            ]
+        )
+        st.dataframe(check_df, use_container_width=True, hide_index=True)
+
+        for issue in validation["hard_issues"]:
+            st.error(issue)
+        for issue in validation["soft_issues"]:
+            st.warning(issue)
+
+        if validation["requires_approval"]:
+            st.session_state.price_validation_approved = st.checkbox(
+                "Abweichungen geprueft und fuer diesen Auftrag freigegeben",
+                value=bool(st.session_state.get("price_validation_approved", False)),
+                key="price_validation_approved_checkbox",
+            )
+        else:
+            st.session_state.price_validation_approved = False
+    else:
+        st.session_state.price_validation_approved = False
+
     wiso_order = build_wiso_price_order(
         st.session_state.price_customer,
         st.session_state.price_project,
@@ -2792,7 +3000,11 @@ def price_calculator_page() -> None:
     st.markdown("### WISO-Vorschau")
     st.dataframe(pd.DataFrame(wiso_order["rows"]), use_container_width=True, hide_index=True)
     st.code(wiso_order_tsv(wiso_order), language="text")
-    if st.button("Start: WISO-Auftrag speichern", use_container_width=True):
+    if st.button(
+        "Start: WISO-Auftrag speichern",
+        use_container_width=True,
+        disabled=not validation["can_save"],
+    ):
         save_wiso_price_order(wiso_order)
         st.success("WISO-Auftrag wurde unter Buero / WISO > Auftraege gespeichert.")
     st.markdown('</div>', unsafe_allow_html=True)
