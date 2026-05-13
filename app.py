@@ -40,6 +40,47 @@ COATINGS = [
     "Keine",
 ]
 
+PRICE_BASE_COATING_MULTIPLIER = 1.2
+PRICE_EXCEL_PI = 3.141
+PRICE_COATING_FACTORS = {
+    "Duplex Meta-VA": 1.40,
+    "Duplex Meta-CAX": 1.50,
+    "Meta-S": 1.40,
+    "AlCrN": 1.40,
+    "TiCN": 1.10,
+    "TiN": 1.10,
+    "CrN": 1.10,
+    "CrN-RB": 1.40,
+    "CrN-DLC": 1.60,
+    "TiaLN": 1.40,
+}
+PRICE_COATINGS = list(PRICE_COATING_FACTORS.keys())
+PRICE_TABLE = [
+    [1000, 2.55645940598109], [2000, 1.27822970299055],
+    [3000, 0.971454574272815], [6000, 0.843631603973761],
+    [10000, 0.81806700991395], [15000, 0.766937821794328],
+    [20000, 0.715808633674706], [25000, 0.664679445555084],
+    [30000, 0.613550257435462], [40000, 0.511291881196219],
+    [50000, 0.460162693076597], [60000, 0.429485180204824],
+    [70000, 0.409033504956975], [80000, 0.342565560401466],
+    [150000, 0.32722680396558], [200000, 0.306775128717731],
+    [250000, 0.301662209905769], [300000, 0.296549291093807],
+    [400000, 0.291436372281845], [500000, 0.28121053465792],
+    [600000, 0.270984697033996], [700000, 0.265871778222034],
+    [800000, 0.245420102974185], [900000, 0.235194265350261],
+    [950000, 0.230081346538298], [1000000, 0.214742590102412],
+    [1100000, 0.199403833666525], [1200000, 0.189177996042601],
+    [1300000, 0.178952158418676], [1400000, 0.168726320794752],
+    [1500000, 0.16361340198279], [1600000, 0.153387564358866],
+    [1700000, 0.143161726734941], [1800000, 0.138048807922979],
+    [1900000, 0.132935889111017], [2000000, 0.11759713267513],
+    [2500000, 0.102258376239244], [3000000, 0.0971454574272815],
+    [3500000, 0.0869196198033572], [4000000, 0.081806700991395],
+    [4500000, 0.0766937821794328], [5000000, 0.0715808633674706],
+    [6500000, 0.0664679445555084], [7500000, 0.0613550257435462],
+    [10000000, 0.056242106931584], [35000000, 0.0511291881196219],
+]
+
 
 def placeholder(path: Path, title: str, subtitle: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -391,6 +432,135 @@ def safe_int(value, default: int = 1) -> int:
         return default
 
 
+def price_default_factor(coating: str) -> float:
+    return float(PRICE_COATING_FACTORS.get(coating, 1.0))
+
+
+def normalize_price_coating(value: str) -> str:
+    if not value:
+        return "TiCN"
+
+    v = str(value).strip().lower()
+    mapping = {
+        "meta-s": "Meta-S",
+        "metas": "Meta-S",
+        "crn": "CrN",
+        "crn-rb": "CrN-RB",
+        "crn rb": "CrN-RB",
+        "crn-dlc": "CrN-DLC",
+        "crn dlc": "CrN-DLC",
+        "duplex meta-va": "Duplex Meta-VA",
+        "duplex meta va": "Duplex Meta-VA",
+        "duplex meta-cax": "Duplex Meta-CAX",
+        "duplex meta cax": "Duplex Meta-CAX",
+        "duplex cax": "Duplex Meta-CAX",
+        "alcrn": "AlCrN",
+        "tin": "TiN",
+        "ticn": "TiCN",
+        "tialn": "TiaLN",
+    }
+    return mapping.get(v, "TiCN")
+
+
+def price_lookup_rate(volume: float) -> float:
+    if volume <= 0:
+        return 0.0
+    rate = PRICE_TABLE[0][1]
+    for threshold, candidate in PRICE_TABLE:
+        if volume >= threshold:
+            rate = candidate
+        else:
+            break
+    return float(rate)
+
+
+def money(value: float) -> float:
+    return round(float(value or 0.0) + 1e-12, 2)
+
+
+def blank_price_position(shape: str = "Eckig") -> Dict:
+    return {
+        "description": "",
+        "quantity": 1,
+        "shape": shape,
+        "coating": "TiCN",
+        "factor": price_default_factor("TiCN"),
+        "diameter": 0.0,
+        "length": 0.0,
+        "width": 0.0,
+        "height": 0.0,
+        "discount": 0.0,
+        "note": "",
+        "source": "manuell",
+    }
+
+
+def normalize_price_position(data: Dict) -> Dict:
+    pos = blank_price_position("Rund" if str(data.get("shape", "")).strip().lower() in ["rund", "round", "zylindrisch"] else "Eckig")
+    coating = normalize_price_coating(str(data.get("coating") or data.get("beschichtung") or pos["coating"]))
+    pos["description"] = str(data.get("description") or data.get("article_description") or data.get("artikelbezeichnung") or "").strip()
+    pos["quantity"] = safe_int(data.get("quantity") or data.get("menge"), 1)
+    pos["shape"] = "Rund" if pos["shape"] == "Rund" else "Eckig"
+    pos["coating"] = coating
+    pos["factor"] = safe_float(data.get("factor") or data.get("r4_factor"), price_default_factor(coating))
+    pos["diameter"] = safe_float(data.get("diameter") or data.get("durchmesser"), 0.0)
+    pos["length"] = safe_float(data.get("length") or data.get("laenge") or data.get("länge"), 0.0)
+    pos["width"] = safe_float(data.get("width") or data.get("breite"), 0.0)
+    pos["height"] = safe_float(data.get("height") or data.get("hoehe") or data.get("höhe"), 0.0)
+    pos["discount"] = max(0.0, min(100.0, safe_float(data.get("discount") or data.get("rabatt"), 0.0)))
+    pos["note"] = str(data.get("note") or data.get("hinweis") or data.get("notes") or "").strip()
+    pos["source"] = str(data.get("source") or "ki").strip()
+    if pos["shape"] == "Rund":
+        pos["width"] = 0.0
+        pos["height"] = 0.0
+    else:
+        pos["diameter"] = 0.0
+    return pos
+
+
+def calc_price_position(pos: Dict) -> Dict:
+    coating = normalize_price_coating(pos.get("coating", "TiCN"))
+    factor = safe_float(pos.get("factor"), price_default_factor(coating))
+    quantity = safe_int(pos.get("quantity"), 1)
+    discount = max(0.0, min(100.0, safe_float(pos.get("discount"), 0.0)))
+    shape = "Rund" if str(pos.get("shape", "Eckig")).lower() == "rund" else "Eckig"
+
+    if shape == "Rund":
+        diameter = safe_float(pos.get("diameter"), 0.0)
+        length = safe_float(pos.get("length"), 0.0)
+        volume = (diameter * diameter) * PRICE_EXCEL_PI / 4 * length
+    else:
+        length = safe_float(pos.get("length"), 0.0)
+        width = safe_float(pos.get("width"), 0.0)
+        height = safe_float(pos.get("height"), 0.0)
+        volume = length * width * height
+
+    multiplier = 1.0 if coating == "TiN" else PRICE_BASE_COATING_MULTIPLIER
+    unit_price = price_lookup_rate(volume) * volume / 1000 * multiplier * factor if volume > 0 and factor > 0 else 0.0
+    normal_total = money(unit_price * quantity)
+    final_total = money(normal_total * (1 - discount / 100))
+    return {
+        "volume": volume,
+        "unit_price": money(unit_price),
+        "normal_total": normal_total,
+        "final_total": final_total,
+        "discount_amount": money(normal_total - final_total),
+    }
+
+
+def normalize_price_ocr_result(data: Dict) -> Dict:
+    positions = data.get("positions") or data.get("items") or []
+    clean_positions = [normalize_price_position(pos) for pos in positions if isinstance(pos, dict)]
+    return {
+        "delivery_id": str(data.get("delivery_id") or data.get("id") or "").strip(),
+        "customer": str(data.get("customer") or "").strip(),
+        "project": str(data.get("project") or data.get("description") or "").strip(),
+        "confidence": max(0, min(100, safe_int(data.get("confidence"), 80))),
+        "ocr_note": str(data.get("ocr_note") or data.get("note") or "GPT-4.1 hat die Positionen fuer den Preisrechner vorbereitet.").strip(),
+        "positions": clean_positions,
+    }
+
+
 def normalize_ocr_result(data: Dict) -> Dict:
     result = fake_ocr(None)
 
@@ -504,6 +674,106 @@ JSON Schema:
         st.info("Es wird auf die Demo-Erkennung zurueckgefallen.")
         return fake_ocr(uploaded_file)
 
+
+
+def real_ocr_price_positions(uploaded_file) -> Dict:
+    if uploaded_file is None:
+        st.warning("Bitte zuerst ein Foto oder einen Scan hochladen.")
+        return normalize_price_ocr_result({"positions": []})
+
+    if not openai_ready():
+        st.warning("OPENAI_API_KEY fehlt oder openai Paket ist nicht installiert. Es wird eine Demo-Position erzeugt.")
+        return normalize_price_ocr_result(
+            {
+                "delivery_id": f"LS-{datetime.now().strftime('%H%M%S')}",
+                "customer": "Musterkunde",
+                "project": "Demo-Erkennung",
+                "confidence": 70,
+                "ocr_note": "Demo-Erkennung: API-Key fehlt. Bitte Werte pruefen.",
+                "positions": [
+                    {
+                        "description": "Demo Rundteil",
+                        "quantity": 4,
+                        "shape": "Rund",
+                        "diameter": 49,
+                        "length": 20,
+                        "coating": "TiCN",
+                    }
+                ],
+            }
+        )
+
+    try:
+        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        image_bytes = uploaded_file.getvalue()
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+        prompt = f"""
+Du liest einen Lieferschein oder ein Produktionsdokument fuer einen Preisrechner aus.
+
+Gib NUR gueltiges JSON zurueck. Kein Markdown, keine Erklaerung.
+
+Ziel:
+- Erkenne Kundennamen und Lieferscheinnummer, falls vorhanden.
+- Erkenne ALLE Positionen auf dem Dokument.
+- Jede Position soll fuer den Preisrechner vorbereitet werden.
+- Wenn ein Dokument mehrere Positionen enthaelt, gib mehrere Eintraege im Array "positions" zurueck.
+
+Regeln:
+- Fuer runde Teile nutze shape = "Rund" und fuelle diameter + length.
+- Fuer eckige Teile nutze shape = "Eckig" und fuelle length + width + height.
+- Wenn nur zwei Masse bei Rundteilen sichtbar sind, nimm Durchmesser und Laenge.
+- Wenn Mengen nicht sicher sind, setze quantity auf 1.
+- Wenn Beschichtung nicht klar lesbar ist, versuche eine beste Zuordnung.
+- Erlaubte Beschichtungen fuer den Preisrechner: {", ".join(PRICE_COATINGS)}.
+- Falls eine Position keine klaren Masse hat, setze die fehlenden Zahlen auf 0.
+- note darf kurze OCR-Hinweise enthalten, z. B. "Masse unsicher".
+
+JSON Schema:
+{{
+  "delivery_id": "string",
+  "customer": "string",
+  "project": "string",
+  "confidence": 0,
+  "ocr_note": "string",
+  "positions": [
+    {{
+      "description": "string",
+      "quantity": 1,
+      "shape": "Rund oder Eckig",
+      "diameter": 0,
+      "length": 0,
+      "width": 0,
+      "height": 0,
+      "coating": "string",
+      "discount": 0,
+      "note": "string"
+    }}
+  ]
+}}
+"""
+
+        response = client.responses.create(
+            model="gpt-4.1",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt},
+                        {"type": "input_image", "image_url": f"data:image/jpeg;base64,{image_base64}"},
+                    ],
+                }
+            ],
+        )
+
+        text = response.output_text.strip()
+        json_text = clean_json_text(text)
+        data = json.loads(json_text)
+        return normalize_price_ocr_result(data)
+    except Exception as e:
+        st.error(f"GPT-4.1 Preis-OCR fehlgeschlagen: {e}")
+        st.info("Es wurden keine Positionen uebernommen.")
+        return normalize_price_ocr_result({"positions": []})
 
 
 def image_bytes_to_data_url(uploaded_file) -> str:
@@ -718,6 +988,14 @@ def init_data() -> None:
         st.session_state.access_token = None
     if "ai_result" not in st.session_state:
         st.session_state.ai_result = None
+    if "price_ai_result" not in st.session_state:
+        st.session_state.price_ai_result = None
+    if "price_positions" not in st.session_state:
+        st.session_state.price_positions = []
+    if "price_customer" not in st.session_state:
+        st.session_state.price_customer = ""
+    if "price_project" not in st.session_state:
+        st.session_state.price_project = ""
 
 
 def current_entries() -> list[Dict]:
@@ -1458,6 +1736,204 @@ def wiso_handover() -> None:
     )
 
 
+def price_calculator_page() -> None:
+    st.markdown("## Preis Rechner")
+    st.markdown(
+        "Lieferschein fotografieren oder hochladen, Positionen per GPT-4.1 auslesen lassen und direkt nach der "
+        "hinterlegten Pondruff-Preislogik kalkulieren."
+    )
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    top_left, top_right = st.columns([1.05, 0.95])
+
+    with top_left:
+        upload = st.file_uploader(
+            "Lieferschein oder Dokument hochladen",
+            type=["png", "jpg", "jpeg"],
+            key="price_upload",
+        )
+        camera = st.camera_input("Oder Foto direkt aufnehmen", key="price_camera")
+        price_doc = camera or upload
+        if price_doc:
+            st.image(price_doc, caption="Dokument fuer Preisrechner", use_container_width=True)
+        else:
+            st.image(ASSETS / "demo_lieferschein.png", caption="Dokument fuer Preisrechner", use_container_width=True)
+
+        if st.button("GPT-4.1 Positionen auslesen", use_container_width=True):
+            with st.spinner("GPT-4.1 liest das Dokument und erkennt Positionen..."):
+                result = real_ocr_price_positions(price_doc)
+                st.session_state.price_ai_result = result
+                st.session_state.price_positions = result.get("positions", [])
+                if result.get("customer"):
+                    st.session_state.price_customer = result["customer"]
+                if result.get("delivery_id"):
+                    st.session_state.price_project = result["delivery_id"]
+            st.rerun()
+
+    with top_right:
+        ai = st.session_state.get("price_ai_result")
+        if ai:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Positionen", len(ai.get("positions", [])))
+            c2.metric("Sicherheit", f"{ai.get('confidence', 0)}%")
+            c3.metric("Lieferschein", ai.get("delivery_id", "-") or "-")
+            if ai.get("customer"):
+                st.write(f"**Kunde:** {ai['customer']}")
+            if ai.get("ocr_note"):
+                st.info(ai["ocr_note"])
+        else:
+            st.info(
+                "Hier kannst du einen Lieferschein mit mehreren Positionen auslesen lassen. "
+                "Die KI versucht Beschichtung, Menge und Masse jeder Position direkt in den Preisrechner zu uebernehmen."
+            )
+
+        customer = st.text_input("Kunde / Firma", value=st.session_state.get("price_customer", ""), key="price_customer_input")
+        project = st.text_input("Projekt / Lieferschein", value=st.session_state.get("price_project", ""), key="price_project_input")
+        express_enabled = st.selectbox("Express-Aufschlag", ["Nein", "Ja"], key="price_express_enabled")
+        express_percent = st.number_input("Express %", min_value=0.0, value=0.0, step=1.0, key="price_express_percent")
+        st.session_state.price_customer = customer
+        st.session_state.price_project = project
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    controls = st.columns(3)
+    if controls[0].button("+ Runde Position", use_container_width=True):
+        st.session_state.price_positions.append(blank_price_position("Rund"))
+        st.rerun()
+    if controls[1].button("+ Eckige Position", use_container_width=True):
+        st.session_state.price_positions.append(blank_price_position("Eckig"))
+        st.rerun()
+    if controls[2].button("Positionen leeren", use_container_width=True):
+        st.session_state.price_positions = []
+        st.session_state.price_ai_result = None
+        st.rerun()
+
+    positions = st.session_state.price_positions
+    if not positions:
+        st.info("Noch keine Positionen vorhanden. Du kannst manuell Positionen anlegen oder ein Dokument auslesen lassen.")
+        return
+
+    total_normal = 0.0
+    total_final = 0.0
+    summary_rows = []
+    remove_index = None
+
+    for idx, original in enumerate(positions):
+        pos = normalize_price_position(original)
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        header = st.columns([1.6, 1, 0.7])
+        title = pos.get("description") or f"Position {idx + 1}"
+        header[0].markdown(f"### Position {idx + 1}: {title}")
+        header[1].markdown(f"**Quelle:** {pos.get('source', 'manuell').capitalize()}")
+        if header[2].button("Loeschen", key=f"remove_price_pos_{idx}", use_container_width=True):
+            remove_index = idx
+
+        row1 = st.columns(5)
+        pos["description"] = row1[0].text_input("Bezeichnung", value=pos["description"], key=f"price_desc_{idx}")
+        pos["quantity"] = row1[1].number_input("Stueckzahl", min_value=1, value=int(pos["quantity"]), step=1, key=f"price_qty_{idx}")
+        pos["shape"] = row1[2].selectbox("Form", ["Eckig", "Rund"], index=0 if pos["shape"] == "Eckig" else 1, key=f"price_shape_{idx}")
+        pos["coating"] = row1[3].selectbox(
+            "Schicht",
+            PRICE_COATINGS,
+            index=PRICE_COATINGS.index(pos["coating"]) if pos["coating"] in PRICE_COATINGS else PRICE_COATINGS.index("TiCN"),
+            key=f"price_coating_{idx}",
+        )
+        pos["factor"] = row1[4].number_input(
+            "R4-Faktor",
+            min_value=0.0,
+            value=float(pos["factor"] or price_default_factor(pos["coating"])),
+            step=0.1,
+            key=f"price_factor_{idx}",
+        )
+
+        row2 = st.columns(5)
+        if pos["shape"] == "Rund":
+            pos["diameter"] = row2[0].number_input("Durchmesser (mm)", min_value=0.0, value=float(pos["diameter"]), step=0.1, key=f"price_d_{idx}")
+            pos["length"] = row2[1].number_input("Laenge (mm)", min_value=0.0, value=float(pos["length"]), step=0.1, key=f"price_l_round_{idx}")
+            pos["width"] = 0.0
+            pos["height"] = 0.0
+            row2[2].metric("Excel-Zelle", "S25 / T25")
+            row2[3].metric("Volumenbasis", "Rund")
+        else:
+            pos["length"] = row2[0].number_input("Laenge (mm)", min_value=0.0, value=float(pos["length"]), step=0.1, key=f"price_l_rect_{idx}")
+            pos["width"] = row2[1].number_input("Breite (mm)", min_value=0.0, value=float(pos["width"]), step=0.1, key=f"price_w_{idx}")
+            pos["height"] = row2[2].number_input("Hoehe (mm)", min_value=0.0, value=float(pos["height"]), step=0.1, key=f"price_h_{idx}")
+            pos["diameter"] = 0.0
+            row2[3].metric("Excel-Zelle", "S10 / T10")
+            row2[4].metric("Volumenbasis", "Eckig")
+
+        row3 = st.columns(3)
+        pos["discount"] = row3[0].number_input("Rabatt %", min_value=0.0, max_value=100.0, value=float(pos["discount"]), step=1.0, key=f"price_discount_{idx}")
+        pos["note"] = row3[1].text_input("Notiz", value=pos["note"], key=f"price_note_{idx}")
+        default_factor = price_default_factor(pos["coating"])
+        row3[2].caption(f"Standardfaktor fuer {pos['coating']}: {default_factor:.2f}")
+
+        result = calc_price_position(pos)
+        total_normal += result["normal_total"]
+        total_final += result["final_total"]
+        positions[idx] = pos
+
+        result_cols = st.columns(4)
+        result_cols[0].metric("Preis / Stk.", f"{result['unit_price']:.2f} EUR")
+        result_cols[1].metric("Normalpreis", f"{result['normal_total']:.2f} EUR")
+        result_cols[2].metric("Rabatt", f"{result['discount_amount']:.2f} EUR")
+        result_cols[3].metric("Preis nach Rabatt", f"{result['final_total']:.2f} EUR")
+
+        summary_rows.append(
+            {
+                "Pos.": idx + 1,
+                "Bezeichnung": pos.get("description") or "-",
+                "Form": pos["shape"],
+                "Schicht": pos["coating"],
+                "Faktor": pos["factor"],
+                "Stk.": pos["quantity"],
+                "Preis Netto": result["final_total"],
+            }
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if remove_index is not None:
+        del st.session_state.price_positions[remove_index]
+        st.rerun()
+
+    discount_sum = money(total_normal - total_final)
+    express_amount = money(total_final * (express_percent / 100)) if express_enabled == "Ja" else 0.0
+    net = money(total_final + express_amount)
+    vat = money(net * 0.19)
+    gross = money(net + vat)
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### Gesamt")
+    s1, s2, s3, s4, s5 = st.columns(5)
+    s1.metric("Normalpreis", f"{money(total_normal):.2f} EUR")
+    s2.metric("Rabatt gesamt", f"{discount_sum:.2f} EUR")
+    s3.metric("Express", f"{express_amount:.2f} EUR")
+    s4.metric("Netto", f"{net:.2f} EUR")
+    s5.metric("Brutto", f"{gross:.2f} EUR")
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+    summary_text = "\n".join(
+        [
+            "Pondruff Preis Rechner",
+            f"Kunde: {st.session_state.price_customer}",
+            f"Projekt/Lieferschein: {st.session_state.price_project}",
+            "",
+        ]
+        + [
+            f"{row['Pos.']}. {row['Bezeichnung']} | {row['Form']} | {row['Schicht']} | Faktor {row['Faktor']:.2f} | {row['Stk.']} Stk. | {row['Preis Netto']:.2f} EUR"
+            for row in summary_rows
+        ]
+        + [
+            "",
+            f"Netto: {net:.2f} EUR",
+            f"MwSt. 19%: {vat:.2f} EUR",
+            f"Brutto: {gross:.2f} EUR",
+        ]
+    )
+    st.code(summary_text, language="text")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def setup_help() -> None:
     st.markdown("## Supabase + OpenAI Setup")
 
@@ -1555,13 +2031,15 @@ def main() -> None:
 
     page = st.sidebar.radio(
         "Navigation",
-        ["Dashboard", "Neuer Wareneingang", "Archiv", "Buero / WISO", "WISO Ãbergabe", "KI-Suche", "Statistik", "Setup"],
+        ["Dashboard", "Neuer Wareneingang", "Preis Rechner", "Archiv", "Buero / WISO", "WISO Ãbergabe", "KI-Suche", "Statistik", "Setup"],
     )
 
     if page == "Dashboard":
         dashboard()
     elif page == "Neuer Wareneingang":
         capture()
+    elif page == "Preis Rechner":
+        price_calculator_page()
     elif page == "Archiv":
         archive()
     elif page == "Buero / WISO":
