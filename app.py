@@ -208,11 +208,79 @@ def css() -> None:
             font-weight:800!important;
             border:1px solid rgba(229,9,9,.5)!important;
         }
-        .stTextInput input,.stNumberInput input,.stTextArea textarea,.stSelectbox div[data-baseweb="select"]>div {
-            background-color:rgba(255,255,255,.055)!important;
-            color:white!important;
-            border-color:rgba(255,255,255,.13)!important;
+        .stTextInput [data-baseweb="input"],
+        .stNumberInput [data-baseweb="input"],
+        .stTextArea [data-baseweb="textarea"],
+        .stSelectbox [data-baseweb="select"] {
+            background:#111821!important;
+            border:1px solid rgba(255,255,255,.22)!important;
             border-radius:14px!important;
+            color:#f7fafc!important;
+        }
+        .stTextInput [data-baseweb="input"] > div,
+        .stNumberInput [data-baseweb="input"] > div,
+        .stTextArea [data-baseweb="textarea"] > div,
+        .stSelectbox [data-baseweb="select"] > div {
+            background:#111821!important;
+            color:#f7fafc!important;
+            border-color:rgba(255,255,255,.22)!important;
+            border-radius:14px!important;
+        }
+        .stTextInput input,
+        .stNumberInput input,
+        .stTextArea textarea,
+        .stSelectbox [data-baseweb="select"] *,
+        [data-baseweb="menu"] * {
+            color:#f7fafc!important;
+            -webkit-text-fill-color:#f7fafc!important;
+        }
+        .stTextInput input,
+        .stNumberInput input,
+        .stTextArea textarea {
+            background:#111821!important;
+            caret-color:#ffffff!important;
+        }
+        .stTextInput input::placeholder,
+        .stNumberInput input::placeholder,
+        .stTextArea textarea::placeholder {
+            color:#95a3b5!important;
+            -webkit-text-fill-color:#95a3b5!important;
+            opacity:1!important;
+        }
+        .stTextInput input:disabled,
+        .stNumberInput input:disabled,
+        .stTextArea textarea:disabled,
+        .stSelectbox [aria-disabled="true"] {
+            background:#18212b!important;
+            color:#d8dee8!important;
+            -webkit-text-fill-color:#d8dee8!important;
+            opacity:1!important;
+        }
+        .stTextInput input:-webkit-autofill,
+        .stNumberInput input:-webkit-autofill {
+            box-shadow:0 0 0 1000px #111821 inset!important;
+            -webkit-text-fill-color:#f7fafc!important;
+            caret-color:#ffffff!important;
+        }
+        [data-baseweb="popover"],
+        [data-baseweb="menu"],
+        [role="listbox"] {
+            background:#111821!important;
+            color:#f7fafc!important;
+        }
+        button[aria-label="Increment"],
+        button[aria-label="Decrement"] {
+            background:#1b2632!important;
+            color:#f7fafc!important;
+        }
+        [data-testid="stFileUploader"] section {
+            background:#111821!important;
+            border-color:rgba(255,255,255,.22)!important;
+            color:#f7fafc!important;
+        }
+        [data-testid="stFileUploader"] section *,
+        [data-testid="stFileUploader"] label {
+            color:#f7fafc!important;
         }
         </style>
         """,
