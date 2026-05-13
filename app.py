@@ -677,7 +677,9 @@ def wiso_compact_dimension_text(pos: Dict) -> str:
 
 def wiso_short_description_text(pos: Dict) -> str:
     description = str(pos.get("description") or "Beschichtung").strip()
-    description = re.split(r",\s*material\s*:", description, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    description = re.sub(r"^pondruck?f[-\s]*[a-z0-9]+\s+beschichtung\s*", "", description, flags=re.IGNORECASE)
+    description = re.split(r",?\s*material\s*:", description, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    description = re.split(r",?\s*ma[ßs]e\s*:", description, maxsplit=1, flags=re.IGNORECASE)[0].strip()
     return description or "Beschichtung"
 
 
@@ -692,6 +694,23 @@ def wiso_description_for_price_position(pos: Dict, is_last: bool, global_purchas
 
     if pos.get("order_no"):
         lines.append(f"Auftrags.-Nr. {pos['order_no']}")
+    if pos.get("cost_center"):
+        lines.append(f"Kostenstelle: {pos['cost_center']}")
+
+    purchase_order = (pos.get("purchase_order") or global_purchase_order) if is_last else ""
+    if purchase_order:
+        lines.append(f"Ihre Bestell.-Nr. {purchase_order}")
+
+    return "\n".join(lines)
+
+
+def wiso_import_description_for_position(pos: Dict, is_last: bool, global_purchase_order: str = "") -> str:
+    description = wiso_short_description_text(pos)
+    coating = normalize_price_coating(pos.get("coating", "TiCN"))
+    lines = [f"{description} {wiso_compact_dimension_text(pos)} {coating} beschichtet."]
+
+    if pos.get("order_no"):
+        lines.append(f"Ihre Auftrags.-Nr. {pos['order_no']}")
     if pos.get("cost_center"):
         lines.append(f"Kostenstelle: {pos['cost_center']}")
 
@@ -726,6 +745,11 @@ def build_wiso_price_order(customer: str, project: str, positions: list[Dict], g
                 "Rabatt (%)": f"{safe_float(pos.get('discount'), 0.0):g}",
                 "Einzelpreis": f"{single_after_discount:.2f}",
                 "Gesamtpreis": f"{result['final_total']:.2f}",
+                "_wiso_import_description": wiso_import_description_for_position(
+                    pos,
+                    is_last=idx == len(clean_positions),
+                    global_purchase_order=global_purchase_order,
+                ),
             }
         )
 
@@ -1059,7 +1083,7 @@ def float_from_wiso_value(value, default: float = 0.0) -> float:
 
 
 def wiso_import_description(row: Dict) -> str:
-    full_description = str(row.get("Beschreibung") or "").strip()
+    full_description = str(row.get("_wiso_import_description") or row.get("Beschreibung") or "").strip()
     if not full_description:
         return ""
 
@@ -1069,9 +1093,7 @@ def wiso_import_description(row: Dict) -> str:
 
     formatted = [lines[0]]
     for line in lines[1:]:
-        if line.startswith("Auftrags.-Nr. "):
-            line = "Ihre " + line
-        formatted.append(f"\t{line}")
+        formatted.append(line)
     return "\n".join(formatted)
 
 
