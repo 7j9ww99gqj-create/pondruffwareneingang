@@ -1234,6 +1234,27 @@ def save_wiso_price_order(order: Dict) -> bool:
     return True
 
 
+def delete_wiso_price_order(order_id: str) -> tuple[bool, str]:
+    order_id = str(order_id or "").strip()
+    if not order_id:
+        return False, "Kein Auftrag zum Loeschen gefunden."
+
+    st.session_state.wiso_price_orders = [
+        existing for existing in st.session_state.get("wiso_price_orders", [])
+        if str(existing.get("id", "")).strip() != order_id
+    ]
+
+    sb = get_supabase()
+    if not sb:
+        return True, "Auftrag lokal geloescht."
+
+    try:
+        sb.table("wiso_preisauftraege").delete().eq("order_id", order_id).execute()
+        return True, "Auftrag geloescht."
+    except Exception:
+        return True, "Auftrag lokal geloescht. Fuer Supabase fehlt vermutlich noch die Delete-Policy."
+
+
 def normalize_ocr_result(data: Dict) -> Dict:
     result = fake_ocr(None)
 
@@ -2186,7 +2207,14 @@ def office() -> None:
             ]
             selected_label = st.selectbox("Auftrag auswaehlen", labels, key="office_price_order_select")
             selected_order = orders[labels.index(selected_label)]
-            st.metric("Gesamt netto", f"{float(selected_order.get('total', 0.0)):.2f} EUR")
+            top_cols = st.columns([1, 1.2])
+            top_cols[0].metric("Gesamt netto", f"{float(selected_order.get('total', 0.0)):.2f} EUR")
+            if top_cols[1].button("Ausgewaehlten Auftrag loeschen", use_container_width=True):
+                ok, message = delete_wiso_price_order(selected_order.get("id", ""))
+                if ok:
+                    st.success(message)
+                    st.rerun()
+                st.error(message)
             df_order = pd.DataFrame(selected_order.get("rows", []))
             st.dataframe(df_order, use_container_width=True, hide_index=True)
             st.caption("Diesen Tab-Block kannst du direkt markieren/kopieren und in WISO als Positionsdaten weiterverwenden.")
@@ -2815,6 +2843,7 @@ alter table wiso_preisauftraege enable row level security;
 
 drop policy if exists "allow authenticated read wiso orders" on wiso_preisauftraege;
 drop policy if exists "allow authenticated insert wiso orders" on wiso_preisauftraege;
+drop policy if exists "allow authenticated delete wiso orders" on wiso_preisauftraege;
 
 create policy "allow authenticated read wiso orders"
 on wiso_preisauftraege for select
@@ -2825,6 +2854,11 @@ create policy "allow authenticated insert wiso orders"
 on wiso_preisauftraege for insert
 to authenticated
 with check (true);
+
+create policy "allow authenticated delete wiso orders"
+on wiso_preisauftraege for delete
+to authenticated
+using (true);
     """, language="sql")
 
     st.markdown("### 3. Storage Bucket")
