@@ -208,10 +208,17 @@ def css() -> None:
         }
         .stButton>button,.stDownloadButton>button {
             border-radius:14px!important;
-            background:linear-gradient(180deg,#f01212,#b80000)!important;
+            background:linear-gradient(180deg,#ff5a5a,#d71919)!important;
             color:white!important;
             font-weight:800!important;
             border:1px solid rgba(229,9,9,.5)!important;
+        }
+        .stButton>button:disabled {
+            background:linear-gradient(180deg,#7e1010,#490707)!important;
+            color:#ffd1d1!important;
+            border:1px solid rgba(110,20,20,.75)!important;
+            cursor:not-allowed!important;
+            opacity:1!important;
         }
         .stTextInput [data-baseweb="input"],
         .stNumberInput [data-baseweb="input"],
@@ -1594,21 +1601,29 @@ def detected_price_checks(ai_result: Optional[Dict], positions: list[Dict]) -> D
             "coatings": sum(1 for pos in clean_positions if normalize_price_coating(pos.get("coating", "TiCN")) != "Keine"),
             "polishing": 0,
             "polishing_prices": 0,
+            "polishing_valid": 0,
             "stripping": 0,
             "stripping_prices": 0,
+            "stripping_valid": 0,
             "notes": [],
         }
 
+    polishing_count = safe_count(ai_result.get("detected_polishing_count"), 0)
+    polishing_price_count = safe_count(ai_result.get("detected_polishing_price_count"), 0)
+    stripping_count = safe_count(ai_result.get("detected_stripping_count"), 0)
+    stripping_price_count = safe_count(ai_result.get("detected_stripping_price_count"), 0)
     return {
         "positions": safe_count(ai_result.get("detected_position_count"), len(clean_positions)),
         "coatings": safe_count(
             ai_result.get("detected_coating_count"),
             sum(1 for pos in clean_positions if normalize_price_coating(pos.get("coating", "TiCN")) != "Keine"),
         ),
-        "polishing": safe_count(ai_result.get("detected_polishing_count"), 0),
-        "polishing_prices": safe_count(ai_result.get("detected_polishing_price_count"), 0),
-        "stripping": safe_count(ai_result.get("detected_stripping_count"), 0),
-        "stripping_prices": safe_count(ai_result.get("detected_stripping_price_count"), 0),
+        "polishing": polishing_count,
+        "polishing_prices": polishing_price_count,
+        "polishing_valid": min(polishing_count, polishing_price_count),
+        "stripping": stripping_count,
+        "stripping_prices": stripping_price_count,
+        "stripping_valid": min(stripping_count, stripping_price_count),
         "notes": [str(note).strip() for note in (ai_result.get("validation_notes") or []) if str(note).strip()],
     }
 
@@ -1625,31 +1640,32 @@ def build_price_validation(expected: Dict, detected: Dict, ai_result: Optional[D
             "can_save": True,
         }
 
-    comparisons = [
-        ("Positionen", expected["positions"], detected["positions"]),
-        ("Beschichtungen", expected["coatings"], detected["coatings"]),
-        ("Polieren", expected["polishing"], detected["polishing"]),
-        ("Entschichten", expected["stripping"], detected["stripping"]),
-    ]
-    for label, expected_value, detected_value in comparisons:
-        if expected_value != detected_value:
-            soft_issues.append(
-                f"Du hast {expected_value} {label.lower()} angegeben, ich habe aber {detected_value} erkannt."
-            )
-
-    if expected["polishing"] > 0 and detected["polishing"] == 0:
-        hard_issues.append("Du hast Polieren angegeben, ich habe aber kein Polieren auf dem Dokument erkannt.")
-    if expected["polishing"] > detected["polishing_prices"]:
-        hard_issues.append(
-            f"Du hast {expected['polishing']} mal Polieren angegeben, aber ich habe nur {detected['polishing_prices']} Polier-Preis(e) erkannt."
+    if expected["positions"] != detected["positions"]:
+        soft_issues.append(
+            f"Du hast {expected['positions']} Positionen angegeben, ich habe aber {detected['positions']} erkannt."
+        )
+    if expected["coatings"] != detected["coatings"]:
+        soft_issues.append(
+            f"Du hast {expected['coatings']} Beschichtungen angegeben, ich habe aber {detected['coatings']} erkannt."
         )
 
-    if expected["stripping"] > 0 and detected["stripping"] == 0:
-        hard_issues.append("Du hast Entschichten angegeben, ich habe aber kein Entschichten auf dem Dokument erkannt.")
-    if expected["stripping"] > detected["stripping_prices"]:
-        hard_issues.append(
-            f"Du hast {expected['stripping']} mal Entschichten angegeben, aber ich habe nur {detected['stripping_prices']} Entschicht-Preis(e) erkannt."
+    if expected["polishing"] != detected["polishing_valid"]:
+        polishing_message = (
+            f"Du hast {expected['polishing']} mal Polieren angegeben, ich habe aber {detected['polishing_valid']} erkannt."
         )
+        if expected["polishing"] > detected["polishing_valid"]:
+            hard_issues.append(polishing_message)
+        else:
+            soft_issues.append(polishing_message)
+
+    if expected["stripping"] != detected["stripping_valid"]:
+        stripping_message = (
+            f"Du hast {expected['stripping']} mal Entschichten angegeben, ich habe aber {detected['stripping_valid']} erkannt."
+        )
+        if expected["stripping"] > detected["stripping_valid"]:
+            hard_issues.append(stripping_message)
+        else:
+            soft_issues.append(stripping_message)
 
     for note in detected.get("notes", []):
         soft_issues.append(note)
@@ -2969,8 +2985,8 @@ def price_calculator_page() -> None:
             [
                 {"Thema": "Positionen", "Du sagst": expected_checks["positions"], "KI erkannt": detected_checks["positions"]},
                 {"Thema": "Beschichtungen", "Du sagst": expected_checks["coatings"], "KI erkannt": detected_checks["coatings"]},
-                {"Thema": "Polieren", "Du sagst": expected_checks["polishing"], "KI erkannt": detected_checks["polishing"]},
-                {"Thema": "Entschichten", "Du sagst": expected_checks["stripping"], "KI erkannt": detected_checks["stripping"]},
+                {"Thema": "Polieren", "Du sagst": expected_checks["polishing"], "KI erkannt": detected_checks["polishing_valid"]},
+                {"Thema": "Entschichten", "Du sagst": expected_checks["stripping"], "KI erkannt": detected_checks["stripping_valid"]},
             ]
         )
         st.dataframe(check_df, use_container_width=True, hide_index=True)
