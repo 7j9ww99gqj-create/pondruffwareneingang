@@ -478,6 +478,13 @@ def money(value: float) -> float:
     return round(float(value or 0.0) + 1e-12, 2)
 
 
+def normalize_price_customer(value: str) -> str:
+    customer = str(value or "").strip()
+    if "pondruff" in customer.lower():
+        return ""
+    return customer
+
+
 def blank_price_position(shape: str = "Eckig") -> Dict:
     return {
         "description": "",
@@ -561,7 +568,7 @@ def normalize_price_ocr_result(data: Dict) -> Dict:
     clean_positions = [normalize_price_position(pos) for pos in positions if isinstance(pos, dict)]
     return {
         "delivery_id": str(data.get("delivery_id") or data.get("id") or "").strip(),
-        "customer": str(data.get("customer") or "").strip(),
+        "customer": normalize_price_customer(str(data.get("customer") or "")),
         "project": str(data.get("project") or data.get("description") or "").strip(),
         "purchase_order": str(data.get("purchase_order") or data.get("bestellnummer") or data.get("bestell_nr") or "").strip(),
         "confidence": max(0, min(100, safe_int(data.get("confidence"), 80))),
@@ -582,7 +589,7 @@ def price_dimension_text(pos: Dict) -> str:
     return f"{length:g} x {width:g} x {height:g} mm"
 
 
-def wiso_description_for_price_position(pos: Dict, is_last: bool, global_purchase_order: str = "") -> str:
+def wiso_description_for_price_position(pos: Dict, is_first: bool, global_purchase_order: str = "") -> str:
     description = pos.get("description") or "Beschichtung"
     coating = normalize_price_coating(pos.get("coating", "TiCN"))
     lines = [f"{description} {price_dimension_text(pos)}, {coating} beschichtet"]
@@ -592,7 +599,7 @@ def wiso_description_for_price_position(pos: Dict, is_last: bool, global_purchas
     if pos.get("cost_center"):
         lines.append(f"Kostenstelle: {pos['cost_center']}")
 
-    purchase_order = pos.get("purchase_order") or (global_purchase_order if is_last else "")
+    purchase_order = (pos.get("purchase_order") or global_purchase_order) if is_first else ""
     if purchase_order:
         lines.append(f"Bestell.-Nr. {purchase_order}")
 
@@ -613,7 +620,7 @@ def build_wiso_price_order(customer: str, project: str, positions: list[Dict], g
                 "Einheit": "Stk.",
                 "Beschreibung": wiso_description_for_price_position(
                     pos,
-                    is_last=idx == len(clean_positions),
+                    is_first=idx == 1,
                     global_purchase_order=global_purchase_order,
                 ),
                 "Rabatt (%)": f"{safe_float(pos.get('discount'), 0.0):g}",
@@ -629,6 +636,7 @@ def build_wiso_price_order(customer: str, project: str, positions: list[Dict], g
         "created_at": datetime.now().strftime("%d.%m.%Y, %H:%M"),
         "customer": customer,
         "project": project,
+        "purchase_order": global_purchase_order,
         "name": order_name,
         "total": total,
         "rows": rows,
@@ -758,9 +766,13 @@ JSON Schema:
 
 
 
-def real_ocr_price_positions(uploaded_file) -> Dict:
-    if uploaded_file is None:
-        st.warning("Bitte zuerst ein Foto oder einen Scan hochladen.")
+def real_ocr_price_positions(uploaded_files) -> Dict:
+    files = uploaded_files or []
+    if not isinstance(files, list):
+        files = [files]
+
+    if not files:
+        st.warning("Bitte zuerst ein oder mehrere Dokumente hochladen.")
         return normalize_price_ocr_result({"positions": []})
 
     if not openai_ready():
@@ -791,8 +803,6 @@ def real_ocr_price_positions(uploaded_file) -> Dict:
 
     try:
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        image_bytes = uploaded_file.getvalue()
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
 
         prompt = f"""
 Du liest einen Lieferschein oder ein Produktionsdokument fuer einen Preisrechner aus.
@@ -801,9 +811,13 @@ Gib NUR gueltiges JSON zurueck. Kein Markdown, keine Erklaerung.
 
 Ziel:
 - Erkenne Kundennamen und Lieferscheinnummer, falls vorhanden.
-- Erkenne ALLE Positionen auf dem Dokument.
+- Wir sind die Firma Pondruff und koennen niemals der Kunde sein.
+- Wenn irgendwo Pondruff als Firmenname auftaucht, ignoriere Pondruff als Kunde.
+- Wenn in Bestellung/Lieferschein ein anderer Firmenname auftaucht, uebernimm diesen als customer.
+- Erkenne ALLE Positionen auf allen Bildern.
+- Lies die Bilder nacheinander und fuehre die erkannten Positionen in einem gemeinsamen Array zusammen.
 - Jede Position soll fuer den Preisrechner vorbereitet werden.
-- Wenn ein Dokument mehrere Positionen enthaelt, gib mehrere Eintraege im Array "positions" zurueck.
+- Wenn Dokumente mehrere Positionen enthalten, gib mehrere Eintraege im Array "positions" zurueck.
 - Erkenne je Position Artikelnummer, Auftragsnummer, Kostenstelle und Bestellnummer, falls vorhanden.
 - Falls eine Bestellnummer nur global auf dem Dokument steht, gib sie oben als purchase_order zurueck.
 
@@ -846,17 +860,16 @@ JSON Schema:
 }}
 """
 
+        content = [{"type": "input_text", "text": prompt}]
+        for idx, uploaded_file in enumerate(files, start=1):
+            image_bytes = uploaded_file.getvalue()
+            image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+            content.append({"type": "input_text", "text": f"Dokumentbild {idx}:"})
+            content.append({"type": "input_image", "image_url": f"data:image/jpeg;base64,{image_base64}"})
+
         response = client.responses.create(
             model="gpt-4.1",
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt},
-                        {"type": "input_image", "image_url": f"data:image/jpeg;base64,{image_base64}"},
-                    ],
-                }
-            ],
+            input=[{"role": "user", "content": content}],
         )
 
         text = response.output_text.strip()
@@ -1093,6 +1106,10 @@ def init_data() -> None:
         st.session_state.price_purchase_order = ""
     if "wiso_price_orders" not in st.session_state:
         st.session_state.wiso_price_orders = []
+    if "price_manual_mode" not in st.session_state:
+        st.session_state.price_manual_mode = False
+    if "price_global_discount" not in st.session_state:
+        st.session_state.price_global_discount = 0.0
 
 
 def current_entries() -> list[Dict]:
@@ -1580,7 +1597,7 @@ def office() -> None:
             st.info("Noch keine Auftragstabelle gespeichert. Im Preis Rechner Positionen erfassen und 'WISO-Auftrag speichern' druecken.")
         else:
             labels = [
-                f"{order.get('created_at', '')} - {order.get('customer', '')} - {order.get('name', order.get('id', ''))}"
+                f"{order.get('created_at', '')} - {order.get('customer', '')} - {order.get('purchase_order', '')}"
                 for order in orders
             ]
             selected_label = st.selectbox("Auftrag auswaehlen", labels, key="office_price_order_select")
@@ -1863,32 +1880,48 @@ def wiso_handover() -> None:
 
 def price_calculator_page() -> None:
     st.markdown("## Preis Rechner")
-    st.markdown(
-        "Lieferschein fotografieren oder hochladen, Positionen per GPT-4.1 auslesen lassen und direkt nach der "
-        "hinterlegten Pondruff-Preislogik kalkulieren."
-    )
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    top_left, top_right = st.columns([1.05, 0.95])
+    top_left, top_right = st.columns([1.2, 0.8])
 
     with top_left:
-        upload = st.file_uploader(
-            "Lieferschein oder Dokument hochladen",
+        uploaded_files = st.file_uploader(
+            "Dokumente hochladen",
             type=["png", "jpg", "jpeg"],
             key="price_upload",
+            accept_multiple_files=True,
         )
-        camera = st.camera_input("Oder Foto direkt aufnehmen", key="price_camera")
-        price_doc = camera or upload
-        if price_doc:
-            st.image(price_doc, caption="Dokument fuer Preisrechner", use_container_width=True)
+        if uploaded_files:
+            st.caption(f"{len(uploaded_files)} Datei(en) bereit zum Auslesen.")
+            preview_cols = st.columns(min(len(uploaded_files), 3))
+            for idx, uploaded_file in enumerate(uploaded_files[:3]):
+                preview_cols[idx % len(preview_cols)].image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
         else:
             st.image(ASSETS / "demo_lieferschein.png", caption="Dokument fuer Preisrechner", use_container_width=True)
 
+        global_discount = st.number_input(
+            "Rabatt / Prozente fuer alle Positionen",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(st.session_state.get("price_global_discount", 0.0)),
+            step=1.0,
+            key="price_global_discount_input",
+        )
+        st.session_state.price_global_discount = global_discount
+
         if st.button("GPT-4.1 Positionen auslesen", use_container_width=True):
             with st.spinner("GPT-4.1 liest das Dokument und erkennt Positionen..."):
-                result = real_ocr_price_positions(price_doc)
+                result = real_ocr_price_positions(uploaded_files)
                 st.session_state.price_ai_result = result
-                st.session_state.price_positions = result.get("positions", [])
+                positions = result.get("positions", [])
+                for idx, pos in enumerate(positions):
+                    pos["discount"] = global_discount
+                    if idx == 0:
+                        pos["purchase_order"] = pos.get("purchase_order") or result.get("purchase_order", "")
+                    else:
+                        pos["purchase_order"] = ""
+                st.session_state.price_positions = positions
+                st.session_state.price_manual_mode = False
                 if result.get("customer"):
                     st.session_state.price_customer = result["customer"]
                 if result.get("delivery_id"):
@@ -1898,46 +1931,65 @@ def price_calculator_page() -> None:
             st.rerun()
 
     with top_right:
-        ai = st.session_state.get("price_ai_result")
-        if ai:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Positionen", len(ai.get("positions", [])))
-            c2.metric("Sicherheit", f"{ai.get('confidence', 0)}%")
-            c3.metric("Lieferschein", ai.get("delivery_id", "-") or "-")
-            if ai.get("customer"):
-                st.write(f"**Kunde:** {ai['customer']}")
-            if ai.get("ocr_note"):
-                st.info(ai["ocr_note"])
-        else:
-            st.info(
-                "Hier kannst du einen Lieferschein mit mehreren Positionen auslesen lassen. "
-                "Die KI versucht Beschichtung, Menge und Masse jeder Position direkt in den Preisrechner zu uebernehmen."
-            )
-
-        customer = st.text_input("Kunde / Firma", value=st.session_state.get("price_customer", ""), key="price_customer_input")
-        project = st.text_input("Projekt / Lieferschein", value=st.session_state.get("price_project", ""), key="price_project_input")
-        purchase_order = st.text_input("Bestell.-Nr. global", value=st.session_state.get("price_purchase_order", ""), key="price_purchase_order_input")
-        express_enabled = st.selectbox("Express-Aufschlag", ["Nein", "Ja"], key="price_express_enabled")
-        express_percent = st.number_input("Express %", min_value=0.0, value=0.0, step=1.0, key="price_express_percent")
-        st.session_state.price_customer = customer
-        st.session_state.price_project = project
-        st.session_state.price_purchase_order = purchase_order
+        if st.button("Preise manuell eintragen", use_container_width=True):
+            st.session_state.price_manual_mode = True
+            st.session_state.price_ai_result = None
+            if not st.session_state.price_positions:
+                st.session_state.price_positions = [blank_price_position("Eckig")]
+            st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
+    positions = st.session_state.price_positions
+    show_details = bool(positions) or st.session_state.get("price_manual_mode", False)
+    if not show_details:
+        return
+
+    ai = st.session_state.get("price_ai_result")
+    if ai:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        c1.text_input("Kunde", value=st.session_state.get("price_customer", ""), disabled=True, key="price_customer_readonly")
+        c2.text_input("Bestellnummer", value=st.session_state.get("price_purchase_order", ""), disabled=True, key="price_purchase_order_readonly")
+        if ai.get("ocr_note"):
+            st.info(ai["ocr_note"])
+        wiso_preview = build_wiso_price_order(
+            st.session_state.price_customer,
+            st.session_state.price_project,
+            positions,
+            st.session_state.price_purchase_order,
+        )
+        st.markdown("### WISO-Vorschau")
+        st.dataframe(pd.DataFrame(wiso_preview["rows"]), use_container_width=True, hide_index=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.session_state.get("price_manual_mode", False):
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        customer = st.text_input("Kunde / Firma", value=st.session_state.get("price_customer", ""), key="price_customer_input")
+        project = st.text_input("Projekt / Lieferschein", value=st.session_state.get("price_project", ""), key="price_project_input")
+        purchase_order = st.text_input("Bestell.-Nr.", value=st.session_state.get("price_purchase_order", ""), key="price_purchase_order_input")
+        st.session_state.price_customer = normalize_price_customer(customer)
+        st.session_state.price_project = project
+        st.session_state.price_purchase_order = purchase_order
+        st.markdown('</div>', unsafe_allow_html=True)
+
     controls = st.columns(3)
     if controls[0].button("+ Runde Position", use_container_width=True):
-        st.session_state.price_positions.append(blank_price_position("Rund"))
+        pos = blank_price_position("Rund")
+        pos["discount"] = st.session_state.price_global_discount
+        st.session_state.price_positions.append(pos)
         st.rerun()
     if controls[1].button("+ Eckige Position", use_container_width=True):
-        st.session_state.price_positions.append(blank_price_position("Eckig"))
+        pos = blank_price_position("Eckig")
+        pos["discount"] = st.session_state.price_global_discount
+        st.session_state.price_positions.append(pos)
         st.rerun()
     if controls[2].button("Positionen leeren", use_container_width=True):
         st.session_state.price_positions = []
         st.session_state.price_ai_result = None
+        st.session_state.price_manual_mode = False
         st.rerun()
 
-    positions = st.session_state.price_positions
     if not positions:
         st.info("Noch keine Positionen vorhanden. Du kannst manuell Positionen anlegen oder ein Dokument auslesen lassen.")
         return
@@ -1998,7 +2050,12 @@ def price_calculator_page() -> None:
         pos["cost_center"] = row3[2].text_input("Kostenstelle", value=pos.get("cost_center", ""), key=f"price_cost_center_{idx}")
 
         row4 = st.columns(3)
-        pos["purchase_order"] = row4[0].text_input("Bestell.-Nr. Position", value=pos.get("purchase_order", ""), key=f"price_purchase_order_pos_{idx}")
+        if idx == 0:
+            pos["purchase_order"] = row4[0].text_input("Bestell.-Nr.", value=pos.get("purchase_order", "") or st.session_state.price_purchase_order, key=f"price_purchase_order_pos_{idx}")
+            st.session_state.price_purchase_order = pos["purchase_order"]
+        else:
+            pos["purchase_order"] = ""
+            row4[0].caption("Bestell.-Nr. wird nur bei Position 1 gefuehrt.")
         pos["note"] = row4[1].text_input("Notiz", value=pos["note"], key=f"price_note_{idx}")
         default_factor = price_default_factor(pos["coating"])
         row4[2].caption(f"Standardfaktor fuer {pos['coating']}: {default_factor:.2f}")
@@ -2033,8 +2090,7 @@ def price_calculator_page() -> None:
         st.rerun()
 
     discount_sum = money(total_normal - total_final)
-    express_amount = money(total_final * (express_percent / 100)) if express_enabled == "Ja" else 0.0
-    net = money(total_final + express_amount)
+    net = money(total_final)
     vat = money(net * 0.19)
     gross = money(net + vat)
 
@@ -2043,7 +2099,7 @@ def price_calculator_page() -> None:
     s1, s2, s3, s4, s5 = st.columns(5)
     s1.metric("Normalpreis", f"{money(total_normal):.2f} EUR")
     s2.metric("Rabatt gesamt", f"{discount_sum:.2f} EUR")
-    s3.metric("Express", f"{express_amount:.2f} EUR")
+    s3.metric("Positionen", len(positions))
     s4.metric("Netto", f"{net:.2f} EUR")
     s5.metric("Brutto", f"{gross:.2f} EUR")
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
