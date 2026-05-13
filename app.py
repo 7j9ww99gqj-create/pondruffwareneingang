@@ -677,7 +677,8 @@ def wiso_compact_dimension_text(pos: Dict) -> str:
 
 def wiso_short_description_text(pos: Dict) -> str:
     description = str(pos.get("description") or "Beschichtung").strip()
-    description = re.sub(r"^pondr?uff[-\s]*[a-z0-9-]+\s+beschichtung\s*", "", description, flags=re.IGNORECASE)
+    description = re.sub(r"^pondr?uff[-\s]*[^\s,]+\s*", "", description, flags=re.IGNORECASE)
+    description = re.sub(r"^beschichtung\s*", "", description, flags=re.IGNORECASE)
     description = re.split(r",?\s*material\s*:", description, maxsplit=1, flags=re.IGNORECASE)[0].strip()
     description = re.split(r",?\s*ma[ßs]e\s*:", description, maxsplit=1, flags=re.IGNORECASE)[0].strip()
     return description or "Beschichtung"
