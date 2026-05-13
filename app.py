@@ -840,6 +840,7 @@ def wiso_copy_button(order: Dict, key: str) -> None:
 
 
 WISO_API_BASE_URL = "https://api.meinbuero.de/openapi"
+WISO_LEGACY_API_BASE_URL = "https://api.meinbuero.de"
 WISO_SECRET_KEYS = {
     "api_key": "WISO_MEINBUERO_API_KEY",
     "api_secret": "WISO_MEINBUERO_API_SECRET",
@@ -868,12 +869,19 @@ def wiso_json_request(
     payload: Optional[Dict] = None,
     token: str = "",
     basic_auth: str = "",
+    base_url: str = WISO_API_BASE_URL,
+    form_payload: Optional[Dict] = None,
 ) -> Dict:
-    url = f"{WISO_API_BASE_URL}{path}"
-    data = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
+    url = f"{base_url}{path}"
+    if form_payload is not None:
+        data = urllib.parse.urlencode(form_payload).encode("utf-8")
+    else:
+        data = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
     headers = {"Accept": "application/json"}
 
-    if payload is not None:
+    if form_payload is not None:
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif payload is not None:
         headers["Content-Type"] = "application/json"
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -908,11 +916,56 @@ def wiso_get_token() -> str:
         raise WisoApiError("WISO Secrets fehlen: " + ", ".join(missing))
 
     basic = base64.b64encode(f"{api_key}:{api_secret}".encode("utf-8")).decode("ascii")
-    response = wiso_json_request("POST", "/auth/token", {"ownershipId": ownership_id}, basic_auth=basic)
-    token = str(response.get("token") or response.get("access_token") or "").strip()
-    if not token:
-        raise WisoApiError("WISO Token konnte nicht aus der Antwort gelesen werden.")
-    return token
+    attempts = [
+        {
+            "base_url": WISO_API_BASE_URL,
+            "payload": {"ownershipId": ownership_id},
+            "form_payload": None,
+        },
+        {
+            "base_url": WISO_LEGACY_API_BASE_URL,
+            "payload": None,
+            "form_payload": {
+                "grant_type": "ownership",
+                "ownershipId": ownership_id,
+            },
+        },
+    ]
+
+    errors = []
+    for attempt in attempts:
+        try:
+            response = wiso_json_request(
+                "POST",
+                "/auth/token",
+                payload=attempt["payload"],
+                basic_auth=basic,
+                base_url=attempt["base_url"],
+                form_payload=attempt["form_payload"],
+            )
+            token = str(response.get("token") or response.get("access_token") or "").strip()
+            if token:
+                return token
+            errors.append(f"{attempt['base_url']}: Token fehlt in Antwort")
+        except WisoApiError as exc:
+            errors.append(f"{attempt['base_url']}: {exc}")
+
+    raise WisoApiError("WISO Token konnte nicht geholt werden. " + " | ".join(errors))
+
+
+def get_wiso_token() -> str:
+    return wiso_get_token()
+
+
+def get_orders() -> Dict:
+    token = get_wiso_token()
+    errors = []
+    for base_url in [WISO_API_BASE_URL, WISO_LEGACY_API_BASE_URL]:
+        try:
+            return wiso_json_request("GET", "/order/", token=token, base_url=base_url)
+        except WisoApiError as exc:
+            errors.append(f"{base_url}: {exc}")
+    raise WisoApiError("WISO Auftraege konnten nicht geladen werden. " + " | ".join(errors))
 
 
 def compact_match_text(value: str) -> str:
@@ -2612,6 +2665,19 @@ WISO_MEINBUERO_API_KEY = "..."
 WISO_MEINBUERO_API_SECRET = "..."
 WISO_MEINBUERO_OWNERSHIP_ID = "..."
     """, language="toml")
+
+    st.markdown("### 1b. WISO API testen")
+    missing = wiso_missing_secrets()
+    if missing:
+        st.info("Zum WISO-Test fehlen noch Secrets: " + ", ".join(missing))
+    elif st.button("WISO testen", use_container_width=True):
+        try:
+            with st.spinner("WISO-Auftraege werden geladen..."):
+                data = get_orders()
+            st.success("WISO API antwortet.")
+            st.write(data)
+        except WisoApiError as exc:
+            st.error(str(exc))
 
     st.markdown("### 2. Supabase SQL")
     st.code("""
