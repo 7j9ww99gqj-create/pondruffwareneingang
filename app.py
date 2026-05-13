@@ -481,6 +481,10 @@ def money(value: float) -> float:
 def blank_price_position(shape: str = "Eckig") -> Dict:
     return {
         "description": "",
+        "article_no": "",
+        "order_no": "",
+        "cost_center": "",
+        "purchase_order": "",
         "quantity": 1,
         "shape": shape,
         "coating": "TiCN",
@@ -499,6 +503,10 @@ def normalize_price_position(data: Dict) -> Dict:
     pos = blank_price_position("Rund" if str(data.get("shape", "")).strip().lower() in ["rund", "round", "zylindrisch"] else "Eckig")
     coating = normalize_price_coating(str(data.get("coating") or data.get("beschichtung") or pos["coating"]))
     pos["description"] = str(data.get("description") or data.get("article_description") or data.get("artikelbezeichnung") or "").strip()
+    pos["article_no"] = str(data.get("article_no") or data.get("artikelnummer") or "").strip()
+    pos["order_no"] = str(data.get("order_no") or data.get("auftragsnummer") or data.get("auftrag") or "").strip()
+    pos["cost_center"] = str(data.get("cost_center") or data.get("kostenstelle") or "").strip()
+    pos["purchase_order"] = str(data.get("purchase_order") or data.get("bestellnummer") or data.get("bestell_nr") or "").strip()
     pos["quantity"] = safe_int(data.get("quantity") or data.get("menge"), 1)
     pos["shape"] = "Rund" if pos["shape"] == "Rund" else "Eckig"
     pos["coating"] = coating
@@ -555,10 +563,84 @@ def normalize_price_ocr_result(data: Dict) -> Dict:
         "delivery_id": str(data.get("delivery_id") or data.get("id") or "").strip(),
         "customer": str(data.get("customer") or "").strip(),
         "project": str(data.get("project") or data.get("description") or "").strip(),
+        "purchase_order": str(data.get("purchase_order") or data.get("bestellnummer") or data.get("bestell_nr") or "").strip(),
         "confidence": max(0, min(100, safe_int(data.get("confidence"), 80))),
         "ocr_note": str(data.get("ocr_note") or data.get("note") or "GPT-4.1 hat die Positionen fuer den Preisrechner vorbereitet.").strip(),
         "positions": clean_positions,
     }
+
+
+def price_dimension_text(pos: Dict) -> str:
+    if pos.get("shape") == "Rund":
+        diameter = safe_float(pos.get("diameter"), 0.0)
+        length = safe_float(pos.get("length"), 0.0)
+        return f"Ø {diameter:g} x {length:g} mm"
+
+    length = safe_float(pos.get("length"), 0.0)
+    width = safe_float(pos.get("width"), 0.0)
+    height = safe_float(pos.get("height"), 0.0)
+    return f"{length:g} x {width:g} x {height:g} mm"
+
+
+def wiso_description_for_price_position(pos: Dict, is_last: bool, global_purchase_order: str = "") -> str:
+    description = pos.get("description") or "Beschichtung"
+    coating = normalize_price_coating(pos.get("coating", "TiCN"))
+    lines = [f"{description} {price_dimension_text(pos)}, {coating} beschichtet"]
+
+    if pos.get("order_no"):
+        lines.append(f"Auftrags.-Nr. {pos['order_no']}")
+    if pos.get("cost_center"):
+        lines.append(f"Kostenstelle: {pos['cost_center']}")
+
+    purchase_order = pos.get("purchase_order") or (global_purchase_order if is_last else "")
+    if purchase_order:
+        lines.append(f"Bestell.-Nr. {purchase_order}")
+
+    return "\n".join(lines)
+
+
+def build_wiso_price_order(customer: str, project: str, positions: list[Dict], global_purchase_order: str = "") -> Dict:
+    clean_positions = [normalize_price_position(pos) for pos in positions]
+    rows = []
+
+    for idx, pos in enumerate(clean_positions, start=1):
+        result = calc_price_position(pos)
+        rows.append(
+            {
+                "Pos.": f"{idx:02d}",
+                "Menge": safe_int(pos.get("quantity"), 1),
+                "Artikel-Nr.": pos.get("article_no", ""),
+                "Einheit": "Stk.",
+                "Beschreibung": wiso_description_for_price_position(
+                    pos,
+                    is_last=idx == len(clean_positions),
+                    global_purchase_order=global_purchase_order,
+                ),
+                "Rabatt (%)": f"{safe_float(pos.get('discount'), 0.0):g}",
+                "Einzelpreis": f"{result['unit_price']:.2f}",
+                "Gesamtpreis": f"{result['final_total']:.2f}",
+            }
+        )
+
+    total = money(sum(float(row["Gesamtpreis"]) for row in rows))
+    order_name = project or f"Preisauftrag {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+    return {
+        "id": f"PREIS-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+        "created_at": datetime.now().strftime("%d.%m.%Y, %H:%M"),
+        "customer": customer,
+        "project": project,
+        "name": order_name,
+        "total": total,
+        "rows": rows,
+    }
+
+
+def wiso_order_tsv(order: Dict) -> str:
+    headers = ["Pos.", "Menge", "Artikel-Nr.", "Einheit", "Beschreibung", "Rabatt (%)", "Einzelpreis", "Gesamtpreis"]
+    lines = ["\t".join(headers)]
+    for row in order.get("rows", []):
+        lines.append("\t".join(str(row.get(header, "")) for header in headers))
+    return "\n".join(lines)
 
 
 def normalize_ocr_result(data: Dict) -> Dict:
@@ -688,11 +770,15 @@ def real_ocr_price_positions(uploaded_file) -> Dict:
                 "delivery_id": f"LS-{datetime.now().strftime('%H%M%S')}",
                 "customer": "Musterkunde",
                 "project": "Demo-Erkennung",
+                "purchase_order": "B-2026-001",
                 "confidence": 70,
                 "ocr_note": "Demo-Erkennung: API-Key fehlt. Bitte Werte pruefen.",
                 "positions": [
                     {
                         "description": "Demo Rundteil",
+                        "article_no": "",
+                        "order_no": "2026050061",
+                        "cost_center": "006",
                         "quantity": 4,
                         "shape": "Rund",
                         "diameter": 49,
@@ -718,6 +804,8 @@ Ziel:
 - Erkenne ALLE Positionen auf dem Dokument.
 - Jede Position soll fuer den Preisrechner vorbereitet werden.
 - Wenn ein Dokument mehrere Positionen enthaelt, gib mehrere Eintraege im Array "positions" zurueck.
+- Erkenne je Position Artikelnummer, Auftragsnummer, Kostenstelle und Bestellnummer, falls vorhanden.
+- Falls eine Bestellnummer nur global auf dem Dokument steht, gib sie oben als purchase_order zurueck.
 
 Regeln:
 - Fuer runde Teile nutze shape = "Rund" und fuelle diameter + length.
@@ -734,11 +822,16 @@ JSON Schema:
   "delivery_id": "string",
   "customer": "string",
   "project": "string",
+  "purchase_order": "string",
   "confidence": 0,
   "ocr_note": "string",
   "positions": [
     {{
       "description": "string",
+      "article_no": "string",
+      "order_no": "string",
+      "cost_center": "string",
+      "purchase_order": "string",
       "quantity": 1,
       "shape": "Rund oder Eckig",
       "diameter": 0,
@@ -996,6 +1089,10 @@ def init_data() -> None:
         st.session_state.price_customer = ""
     if "price_project" not in st.session_state:
         st.session_state.price_project = ""
+    if "price_purchase_order" not in st.session_state:
+        st.session_state.price_purchase_order = ""
+    if "wiso_price_orders" not in st.session_state:
+        st.session_state.wiso_price_orders = []
 
 
 def current_entries() -> list[Dict]:
@@ -1474,34 +1571,62 @@ def wiso_text(e: Dict) -> str:
 def office() -> None:
     st.markdown("## Buero / WISO")
 
-    rows = []
-    for e in current_entries():
-        rows.append({
-            "Lieferschein": e.get("id", e.get("delivery_id", "")),
-            "Datum": e.get("date", ""),
-            "Bediener": e.get("operator", "-"),
-            "Kunde": e.get("customer", ""),
-            "Artikelnummer": e.get("article_no", ""),
-            "Artikelbezeichnung": e.get("description", ""),
-            "Menge": e.get("quantity", 0),
-            "Form": e.get("shape", "Eckig"),
-            "Masse": entry_dimensions(e),
-            "Poliert": e.get("polished", "Nein"),
-            "Polierpreis": f"{float(e.get('polishing_price', 0)):.2f} EUR",
-            "Beschichtet": e.get("coated", "Nein"),
-            "Beschichtung": e.get("coating", "Keine"),
-            "OCR": f"{e.get('ocr_confidence', 0)}%",
-        })
+    tab_orders, tab_entries = st.tabs(["Auftraege", "Wareneingaenge"])
 
-    df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    with tab_orders:
+        orders = st.session_state.get("wiso_price_orders", [])
+        st.markdown("### Auftraege aus dem Preis Rechner")
+        if not orders:
+            st.info("Noch keine Auftragstabelle gespeichert. Im Preis Rechner Positionen erfassen und 'WISO-Auftrag speichern' druecken.")
+        else:
+            labels = [
+                f"{order.get('created_at', '')} - {order.get('customer', '')} - {order.get('name', order.get('id', ''))}"
+                for order in orders
+            ]
+            selected_label = st.selectbox("Auftrag auswaehlen", labels, key="office_price_order_select")
+            selected_order = orders[labels.index(selected_label)]
+            st.metric("Gesamt netto", f"{float(selected_order.get('total', 0.0)):.2f} EUR")
+            df_order = pd.DataFrame(selected_order.get("rows", []))
+            st.dataframe(df_order, use_container_width=True, hide_index=True)
+            st.caption("Diesen Tab-Block kannst du direkt markieren/kopieren und in WISO als Positionsdaten weiterverwenden.")
+            st.code(wiso_order_tsv(selected_order), language="text")
+            st.download_button(
+                "Auftrag als CSV exportieren",
+                data=df_order.to_csv(index=False, sep=";").encode("utf-8-sig"),
+                file_name=f"{selected_order.get('id', 'preisauftrag')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
-    entries = current_entries()
-    selected = st.selectbox("Datensatz fuer WISO auswaehlen", [e.get("id", e.get("delivery_id", "")) for e in entries])
-    entry = next(e for e in entries if e.get("id", e.get("delivery_id", "")) == selected)
+    with tab_entries:
+        rows = []
+        for e in current_entries():
+            rows.append({
+                "Lieferschein": e.get("id", e.get("delivery_id", "")),
+                "Datum": e.get("date", ""),
+                "Bediener": e.get("operator", "-"),
+                "Kunde": e.get("customer", ""),
+                "Artikelnummer": e.get("article_no", ""),
+                "Artikelbezeichnung": e.get("description", ""),
+                "Menge": e.get("quantity", 0),
+                "Form": e.get("shape", "Eckig"),
+                "Masse": entry_dimensions(e),
+                "Poliert": e.get("polished", "Nein"),
+                "Polierpreis": f"{float(e.get('polishing_price', 0)):.2f} EUR",
+                "Beschichtet": e.get("coated", "Nein"),
+                "Beschichtung": e.get("coating", "Keine"),
+                "OCR": f"{e.get('ocr_confidence', 0)}%",
+            })
 
-    st.code(wiso_text(entry), language="text")
-    st.download_button("CSV exportieren", data=df.to_csv(index=False, sep=";").encode("utf-8-sig"), file_name="wareneingang_wiso.csv", mime="text/csv")
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        entries = current_entries()
+        selected = st.selectbox("Datensatz fuer WISO auswaehlen", [e.get("id", e.get("delivery_id", "")) for e in entries])
+        entry = next(e for e in entries if e.get("id", e.get("delivery_id", "")) == selected)
+
+        st.code(wiso_text(entry), language="text")
+        st.download_button("CSV exportieren", data=df.to_csv(index=False, sep=";").encode("utf-8-sig"), file_name="wareneingang_wiso.csv", mime="text/csv")
 
 
 def ai_search() -> None:
@@ -1768,6 +1893,8 @@ def price_calculator_page() -> None:
                     st.session_state.price_customer = result["customer"]
                 if result.get("delivery_id"):
                     st.session_state.price_project = result["delivery_id"]
+                if result.get("purchase_order"):
+                    st.session_state.price_purchase_order = result["purchase_order"]
             st.rerun()
 
     with top_right:
@@ -1789,10 +1916,12 @@ def price_calculator_page() -> None:
 
         customer = st.text_input("Kunde / Firma", value=st.session_state.get("price_customer", ""), key="price_customer_input")
         project = st.text_input("Projekt / Lieferschein", value=st.session_state.get("price_project", ""), key="price_project_input")
+        purchase_order = st.text_input("Bestell.-Nr. global", value=st.session_state.get("price_purchase_order", ""), key="price_purchase_order_input")
         express_enabled = st.selectbox("Express-Aufschlag", ["Nein", "Ja"], key="price_express_enabled")
         express_percent = st.number_input("Express %", min_value=0.0, value=0.0, step=1.0, key="price_express_percent")
         st.session_state.price_customer = customer
         st.session_state.price_project = project
+        st.session_state.price_purchase_order = purchase_order
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1830,6 +1959,7 @@ def price_calculator_page() -> None:
 
         row1 = st.columns(5)
         pos["description"] = row1[0].text_input("Bezeichnung", value=pos["description"], key=f"price_desc_{idx}")
+        pos["article_no"] = row1[0].text_input("Artikel-Nr.", value=pos.get("article_no", ""), key=f"price_article_no_{idx}")
         pos["quantity"] = row1[1].number_input("Stueckzahl", min_value=1, value=int(pos["quantity"]), step=1, key=f"price_qty_{idx}")
         pos["shape"] = row1[2].selectbox("Form", ["Eckig", "Rund"], index=0 if pos["shape"] == "Eckig" else 1, key=f"price_shape_{idx}")
         pos["coating"] = row1[3].selectbox(
@@ -1864,9 +1994,14 @@ def price_calculator_page() -> None:
 
         row3 = st.columns(3)
         pos["discount"] = row3[0].number_input("Rabatt %", min_value=0.0, max_value=100.0, value=float(pos["discount"]), step=1.0, key=f"price_discount_{idx}")
-        pos["note"] = row3[1].text_input("Notiz", value=pos["note"], key=f"price_note_{idx}")
+        pos["order_no"] = row3[1].text_input("Auftrags.-Nr.", value=pos.get("order_no", ""), key=f"price_order_no_{idx}")
+        pos["cost_center"] = row3[2].text_input("Kostenstelle", value=pos.get("cost_center", ""), key=f"price_cost_center_{idx}")
+
+        row4 = st.columns(3)
+        pos["purchase_order"] = row4[0].text_input("Bestell.-Nr. Position", value=pos.get("purchase_order", ""), key=f"price_purchase_order_pos_{idx}")
+        pos["note"] = row4[1].text_input("Notiz", value=pos["note"], key=f"price_note_{idx}")
         default_factor = price_default_factor(pos["coating"])
-        row3[2].caption(f"Standardfaktor fuer {pos['coating']}: {default_factor:.2f}")
+        row4[2].caption(f"Standardfaktor fuer {pos['coating']}: {default_factor:.2f}")
 
         result = calc_price_position(pos)
         total_normal += result["normal_total"]
@@ -1883,6 +2018,7 @@ def price_calculator_page() -> None:
             {
                 "Pos.": idx + 1,
                 "Bezeichnung": pos.get("description") or "-",
+                "Artikel-Nr.": pos.get("article_no", ""),
                 "Form": pos["shape"],
                 "Schicht": pos["coating"],
                 "Faktor": pos["factor"],
@@ -1931,6 +2067,19 @@ def price_calculator_page() -> None:
         ]
     )
     st.code(summary_text, language="text")
+
+    wiso_order = build_wiso_price_order(
+        st.session_state.price_customer,
+        st.session_state.price_project,
+        st.session_state.price_positions,
+        st.session_state.price_purchase_order,
+    )
+    st.markdown("### WISO-Vorschau")
+    st.dataframe(pd.DataFrame(wiso_order["rows"]), use_container_width=True, hide_index=True)
+    st.code(wiso_order_tsv(wiso_order), language="text")
+    if st.button("Start: WISO-Auftrag speichern", use_container_width=True):
+        st.session_state.wiso_price_orders.insert(0, wiso_order)
+        st.success("WISO-Auftrag wurde unter Buero / WISO > Auftraege gespeichert.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 
