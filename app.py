@@ -738,22 +738,58 @@ def tsv_cell(value) -> str:
     return text
 
 
+def wiso_clipboard_columns() -> list[str]:
+    return ["Menge", "Artikel-Nr.", "Einheit", "Beschreibung", "Liefertermin", "Listenpreis", "Rabatt (%)", "Einzelpreis", "Gesamtpreis"]
+
+
+def wiso_clipboard_value(row: Dict, column: str) -> str:
+    value = row.get(column, "")
+    if column in ["Listenpreis", "Einzelpreis", "Gesamtpreis"]:
+        return str(value).replace(".", ",")
+    return str(value if value is not None else "")
+
+
 def wiso_clipboard_tsv(order: Dict) -> str:
-    columns = ["Menge", "Artikel-Nr.", "Einheit", "Beschreibung", "Liefertermin", "Listenpreis", "Rabatt (%)", "Einzelpreis", "Gesamtpreis"]
+    columns = wiso_clipboard_columns()
     lines = []
     for row in order.get("rows", []):
-        values = []
-        for column in columns:
-            value = row.get(column, "")
-            if column in ["Listenpreis", "Einzelpreis", "Gesamtpreis"]:
-                value = str(value).replace(".", ",")
-            values.append(tsv_cell(value))
+        values = [tsv_cell(wiso_clipboard_value(row, column)) for column in columns]
         lines.append("\t".join(values))
     return "\r\n".join(lines)
 
 
+def wiso_clipboard_plain_tsv(order: Dict) -> str:
+    columns = wiso_clipboard_columns()
+    lines = []
+    for row in order.get("rows", []):
+        values = []
+        for column in columns:
+            value = wiso_clipboard_value(row, column)
+            if column == "Beschreibung":
+                value = value.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " / ")
+            values.append(value.replace("\t", " "))
+        lines.append("\t".join(values))
+    return "\r\n".join(lines)
+
+
+def wiso_clipboard_html(order: Dict) -> str:
+    columns = ["Menge", "Artikel-Nr.", "Einheit", "Beschreibung", "Liefertermin", "Listenpreis", "Rabatt (%)", "Einzelpreis", "Gesamtpreis"]
+    rows = []
+    for row in order.get("rows", []):
+        cells = []
+        for column in columns:
+            value = html.escape(wiso_clipboard_value(row, column))
+            if column == "Beschreibung":
+                value = value.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+            cells.append(f"<td>{value}</td>")
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    return "<table><tbody>" + "".join(rows) + "</tbody></table>"
+
+
 def wiso_copy_button(order: Dict, key: str) -> None:
-    payload = json.dumps(wiso_clipboard_tsv(order))
+    tsv_payload = json.dumps(wiso_clipboard_tsv(order))
+    plain_payload = json.dumps(wiso_clipboard_plain_tsv(order))
+    html_payload = json.dumps(wiso_clipboard_html(order))
     components.html(
         f"""
         <button id="copy-{key}" style="
@@ -768,14 +804,25 @@ def wiso_copy_button(order: Dict, key: str) -> None:
         ">WISO Copy</button>
         <script>
         const btn = document.getElementById("copy-{key}");
-        const text = {payload};
+        const text = {tsv_payload};
+        const plainText = {plain_payload};
+        const htmlText = {html_payload};
         btn.addEventListener("click", async () => {{
           try {{
-            await navigator.clipboard.writeText(text);
+            if (window.ClipboardItem) {{
+              await navigator.clipboard.write([
+                new ClipboardItem({{
+                  "text/html": new Blob([htmlText], {{ type: "text/html" }}),
+                  "text/plain": new Blob([text], {{ type: "text/plain" }})
+                }})
+              ]);
+            }} else {{
+              await navigator.clipboard.writeText(text);
+            }}
             btn.textContent = "WISO Daten kopiert";
           }} catch (err) {{
             const area = document.createElement("textarea");
-            area.value = text;
+            area.value = plainText;
             document.body.appendChild(area);
             area.select();
             document.execCommand("copy");
