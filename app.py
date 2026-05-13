@@ -2748,8 +2748,6 @@ def price_calculator_page() -> None:
     )
     st.markdown("### WISO-Vorschau")
     st.dataframe(pd.DataFrame(wiso_order["rows"]), use_container_width=True, hide_index=True)
-    wiso_copy_button(wiso_order, key="price")
-    wiso_api_button(wiso_order, key="price")
     st.code(wiso_order_tsv(wiso_order), language="text")
     if st.button("Start: WISO-Auftrag speichern", use_container_width=True):
         save_wiso_price_order(wiso_order)
