@@ -663,24 +663,35 @@ def price_dimension_text(pos: Dict) -> str:
     return f"{length:g} x {width:g} x {height:g} mm"
 
 
+def wiso_compact_dimension_text(pos: Dict) -> str:
+    if pos.get("shape") == "Rund":
+        diameter = safe_float(pos.get("diameter"), 0.0)
+        length = safe_float(pos.get("length"), 0.0)
+        return f"Ø{diameter:g}x{length:g}mm"
+
+    length = safe_float(pos.get("length"), 0.0)
+    width = safe_float(pos.get("width"), 0.0)
+    height = safe_float(pos.get("height"), 0.0)
+    return f"{length:g}x{width:g}x{height:g}mm"
+
+
 def money_de(value: float) -> str:
     return f"{money(value):.2f}".replace(".", ",")
 
 
-def wiso_description_for_price_position(pos: Dict, is_first: bool, global_purchase_order: str = "") -> str:
+def wiso_description_for_price_position(pos: Dict, is_last: bool, global_purchase_order: str = "") -> str:
     description = pos.get("description") or "Beschichtung"
     coating = normalize_price_coating(pos.get("coating", "TiCN"))
-    position_part = f" Pos. {pos['position_no']}" if pos.get("position_no") else ""
-    lines = [f"{description} {price_dimension_text(pos)}{position_part}, {coating} beschichtet."]
+    lines = [f"{description} {wiso_compact_dimension_text(pos)} {coating} beschichtet."]
 
     if pos.get("order_no"):
         lines.append(f"Auftrags.-Nr. {pos['order_no']}")
     if pos.get("cost_center"):
         lines.append(f"Kostenstelle: {pos['cost_center']}")
 
-    purchase_order = (pos.get("purchase_order") or global_purchase_order) if is_first else ""
+    purchase_order = (pos.get("purchase_order") or global_purchase_order) if is_last else ""
     if purchase_order:
-        lines.append(f"Bestell.-Nr. {purchase_order}")
+        lines.append(f"Ihre Bestell.-Nr. {purchase_order}")
 
     return "\n".join(lines)
 
@@ -701,7 +712,7 @@ def build_wiso_price_order(customer: str, project: str, positions: list[Dict], g
                 "Einheit": "",
                 "Beschreibung": wiso_description_for_price_position(
                     pos,
-                    is_first=idx == 1,
+                    is_last=idx == len(clean_positions),
                     global_purchase_order=global_purchase_order,
                 ),
                 "Liefertermin": "",
@@ -1043,7 +1054,8 @@ def float_from_wiso_value(value, default: float = 0.0) -> float:
 
 def wiso_order_position_payload(row: Dict) -> Dict:
     description = str(row.get("Beschreibung") or "").strip()
-    title = description.splitlines()[0][:80] if description else "Pondruff Beschichtung"
+    article_no = str(row.get("Artikel-Nr.") or "").strip()
+    title = (article_no or description.splitlines()[0] or "Pondruff Beschichtung")[:80]
     price_net = float_from_wiso_value(row.get("Einzelpreis"), 0.0)
     if price_net <= 0:
         price_net = float_from_wiso_value(row.get("Listenpreis"), 0.0)
@@ -2570,7 +2582,7 @@ def price_calculator_page() -> None:
             st.session_state.price_purchase_order = pos["purchase_order"]
         else:
             pos["purchase_order"] = ""
-            row4[1].caption("Bestell.-Nr. wird nur bei Position 1 gefuehrt.")
+            row4[1].caption("Bestell.-Nr. wird fuer WISO nur in der letzten Position ausgegeben.")
 
         row5 = st.columns(3)
         pos["note"] = row5[0].text_input("Notiz", value=pos["note"], key=f"price_note_{idx}")
