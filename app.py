@@ -675,12 +675,18 @@ def wiso_compact_dimension_text(pos: Dict) -> str:
     return f"{length:g}x{width:g}x{height:g}mm"
 
 
+def wiso_short_description_text(pos: Dict) -> str:
+    description = str(pos.get("description") or "Beschichtung").strip()
+    description = re.split(r",\s*material\s*:", description, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    return description or "Beschichtung"
+
+
 def money_de(value: float) -> str:
     return f"{money(value):.2f}".replace(".", ",")
 
 
 def wiso_description_for_price_position(pos: Dict, is_last: bool, global_purchase_order: str = "") -> str:
-    description = pos.get("description") or "Beschichtung"
+    description = wiso_short_description_text(pos)
     coating = normalize_price_coating(pos.get("coating", "TiCN"))
     lines = [f"{description} {wiso_compact_dimension_text(pos)} {coating} beschichtet."]
 
@@ -1053,7 +1059,8 @@ def float_from_wiso_value(value, default: float = 0.0) -> float:
 
 
 def wiso_order_position_payload(row: Dict) -> Dict:
-    description = str(row.get("Beschreibung") or "").strip()
+    full_description = str(row.get("Beschreibung") or "").strip()
+    description = full_description.splitlines()[0].strip()
     article_no = str(row.get("Artikel-Nr.") or "").strip()
     title = (article_no or description.splitlines()[0] or "Pondruff Beschichtung")[:80]
     price_net = float_from_wiso_value(row.get("Einzelpreis"), 0.0)
