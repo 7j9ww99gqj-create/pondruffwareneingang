@@ -719,6 +719,51 @@ def wiso_order_tsv(order: Dict) -> str:
     return "\n".join(lines)
 
 
+def load_wiso_price_orders() -> list[Dict]:
+    orders = list(st.session_state.get("wiso_price_orders", []))
+    sb = get_supabase()
+    if not sb:
+        return orders
+
+    try:
+        res = sb.table("wiso_preisauftraege").select("*").order("created_at", desc=True).execute()
+        cloud_orders = [row.get("order_data") for row in (res.data or []) if row.get("order_data")]
+        seen = {order.get("id") for order in orders}
+        for order in cloud_orders:
+            if order.get("id") not in seen:
+                orders.append(order)
+                seen.add(order.get("id"))
+        st.session_state.wiso_price_orders = orders
+    except Exception:
+        pass
+    return orders
+
+
+def save_wiso_price_order(order: Dict) -> bool:
+    st.session_state.wiso_price_orders = [
+        existing for existing in st.session_state.get("wiso_price_orders", [])
+        if existing.get("id") != order.get("id")
+    ]
+    st.session_state.wiso_price_orders.insert(0, order)
+
+    sb = get_supabase()
+    if not sb:
+        return True
+
+    try:
+        sb.table("wiso_preisauftraege").insert(
+            {
+                "order_id": order.get("id", ""),
+                "customer": order.get("customer", ""),
+                "purchase_order": order.get("purchase_order", ""),
+                "order_data": order,
+            }
+        ).execute()
+    except Exception:
+        pass
+    return True
+
+
 def normalize_ocr_result(data: Dict) -> Dict:
     result = fake_ocr(None)
 
@@ -1659,7 +1704,7 @@ def office() -> None:
     tab_orders, tab_entries = st.tabs(["Auftraege", "Wareneingaenge"])
 
     with tab_orders:
-        orders = st.session_state.get("wiso_price_orders", [])
+        orders = load_wiso_price_orders()
         st.markdown("### Auftraege aus dem Preis Rechner")
         if not orders:
             st.info("Noch keine Auftragstabelle gespeichert. Im Preis Rechner Positionen erfassen und 'WISO-Auftrag speichern' druecken.")
@@ -2060,6 +2105,7 @@ def price_calculator_page() -> None:
     total_normal = 0.0
     total_final = 0.0
     summary_rows = []
+    updated_positions = []
     remove_index = None
 
     for idx, original in enumerate(positions):
@@ -2127,6 +2173,7 @@ def price_calculator_page() -> None:
         total_normal += result["normal_total"]
         total_final += result["final_total"]
         positions[idx] = pos
+        updated_positions.append(pos)
 
         result_cols = st.columns(4)
         result_cols[0].metric("Preis / Stk.", f"{result['unit_price']:.2f} EUR")
@@ -2151,6 +2198,8 @@ def price_calculator_page() -> None:
     if remove_index is not None:
         del st.session_state.price_positions[remove_index]
         st.rerun()
+
+    st.session_state.price_positions = updated_positions
 
     discount_sum = money(total_normal - total_final)
     net = money(total_final)
@@ -2190,14 +2239,14 @@ def price_calculator_page() -> None:
     wiso_order = build_wiso_price_order(
         st.session_state.price_customer,
         st.session_state.price_project,
-        st.session_state.price_positions,
+        updated_positions,
         st.session_state.price_purchase_order,
     )
     st.markdown("### WISO-Vorschau")
     st.dataframe(pd.DataFrame(wiso_order["rows"]), use_container_width=True, hide_index=True)
     st.code(wiso_order_tsv(wiso_order), language="text")
     if st.button("Start: WISO-Auftrag speichern", use_container_width=True):
-        st.session_state.wiso_price_orders.insert(0, wiso_order)
+        save_wiso_price_order(wiso_order)
         st.success("WISO-Auftrag wurde unter Buero / WISO > Auftraege gespeichert.")
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -2256,6 +2305,30 @@ using (true);
 
 create policy "allow authenticated insert"
 on wareneingaenge for insert
+to authenticated
+with check (true);
+
+create table if not exists wiso_preisauftraege (
+  uuid uuid default gen_random_uuid() primary key,
+  created_at timestamp with time zone default now(),
+  order_id text,
+  customer text,
+  purchase_order text,
+  order_data jsonb
+);
+
+alter table wiso_preisauftraege enable row level security;
+
+drop policy if exists "allow authenticated read wiso orders" on wiso_preisauftraege;
+drop policy if exists "allow authenticated insert wiso orders" on wiso_preisauftraege;
+
+create policy "allow authenticated read wiso orders"
+on wiso_preisauftraege for select
+to authenticated
+using (true);
+
+create policy "allow authenticated insert wiso orders"
+on wiso_preisauftraege for insert
 to authenticated
 with check (true);
     """, language="sql")
