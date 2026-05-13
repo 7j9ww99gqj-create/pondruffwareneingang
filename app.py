@@ -2207,9 +2207,9 @@ def office() -> None:
             ]
             selected_label = st.selectbox("Auftrag auswaehlen", labels, key="office_price_order_select")
             selected_order = orders[labels.index(selected_label)]
-            top_cols = st.columns([1, 1.2])
+            top_cols = st.columns([1, 0.12])
             top_cols[0].metric("Gesamt netto", f"{float(selected_order.get('total', 0.0)):.2f} EUR")
-            if top_cols[1].button("Ausgewaehlten Auftrag loeschen", use_container_width=True):
+            if top_cols[1].button("X", key=f"delete_wiso_order_{selected_order.get('id', '')}", use_container_width=True):
                 ok, message = delete_wiso_price_order(selected_order.get("id", ""))
                 if ok:
                     st.success(message)
@@ -2898,12 +2898,12 @@ def main() -> None:
 
     page = st.sidebar.radio(
         "Navigation",
-        ["Dashboard", "Neuer Wareneingang", "Preis Rechner", "Archiv", "Buero / WISO", "WISO Ãbergabe", "KI-Suche", "Statistik", "Setup"],
+        ["Dashboard", "Wareneingang", "Preis Rechner", "Archiv", "Buero / WISO", "KI-Suche", "Statistik", "Setup"],
     )
 
     if page == "Dashboard":
         dashboard()
-    elif page == "Neuer Wareneingang":
+    elif page == "Wareneingang":
         capture()
     elif page == "Preis Rechner":
         price_calculator_page()
@@ -2911,8 +2911,6 @@ def main() -> None:
         archive()
     elif page == "Buero / WISO":
         office()
-    elif page == "WISO Ãbergabe":
-        wiso_handover()
     elif page == "KI-Suche":
         ai_search()
     elif page == "Statistik":
