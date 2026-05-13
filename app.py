@@ -899,6 +899,22 @@ def wiso_json_request(
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")
+        try:
+            detail_json = json.loads(detail) if detail else {}
+        except json.JSONDecodeError:
+            detail_json = {}
+
+        api_scopes = detail_json.get("meta", {}).get("apiScopes", [])
+        if api_scopes:
+            raise WisoApiError(
+                "WISO API Zugriff nicht freigeschaltet. Bitte in MeinBuero unter "
+                "'Eigene Erweiterungen' bei deiner App die benoetigten API-Zugriffe "
+                "fuer Kunden und Auftraege aktivieren und erneut speichern/veroeffentlichen."
+            ) from exc
+
+        message = detail_json.get("message") if isinstance(detail_json, dict) else ""
+        if message:
+            raise WisoApiError(f"WISO API Fehler {exc.code}: {message}") from exc
         raise WisoApiError(f"WISO API Fehler {exc.code}: {detail or exc.reason}") from exc
     except urllib.error.URLError as exc:
         raise WisoApiError(f"WISO API nicht erreichbar: {exc.reason}") from exc
@@ -960,9 +976,13 @@ def get_wiso_token() -> str:
 def get_orders() -> Dict:
     token = get_wiso_token()
     errors = []
-    for base_url in [WISO_API_BASE_URL, WISO_LEGACY_API_BASE_URL]:
+    query = urllib.parse.urlencode({"offset": 0, "limit": 20})
+    for base_url, path in [
+        (WISO_API_BASE_URL, f"/order?{query}"),
+        (WISO_API_BASE_URL, f"/orders?{query}"),
+    ]:
         try:
-            return wiso_json_request("GET", "/order/", token=token, base_url=base_url)
+            return wiso_json_request("GET", path, token=token, base_url=base_url)
         except WisoApiError as exc:
             errors.append(f"{base_url}: {exc}")
     raise WisoApiError("WISO Auftraege konnten nicht geladen werden. " + " | ".join(errors))
