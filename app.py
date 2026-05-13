@@ -1044,16 +1044,12 @@ def float_from_wiso_value(value, default: float = 0.0) -> float:
 def wiso_order_position_payload(row: Dict) -> Dict:
     description = str(row.get("Beschreibung") or "").strip()
     title = description.splitlines()[0][:80] if description else "Pondruff Beschichtung"
-    article_no = str(row.get("Artikel-Nr.") or "").strip()
-    meta_data = {"type": "custom"}
-    if article_no:
-        meta_data["number"] = article_no
-
-    price_net = float_from_wiso_value(row.get("Listenpreis"), 0.0)
-    discount = float_from_wiso_value(row.get("Rabatt (%)"), 0.0)
+    price_net = float_from_wiso_value(row.get("Einzelpreis"), 0.0)
+    if price_net <= 0:
+        price_net = float_from_wiso_value(row.get("Listenpreis"), 0.0)
 
     return {
-        "amount": float_from_wiso_value(row.get("Menge"), 1.0),
+        "amount": safe_int(row.get("Menge"), 1),
         "title": title,
         "description": description,
         "showDescription": True,
@@ -1061,32 +1057,16 @@ def wiso_order_position_payload(row: Dict) -> Dict:
         "priceNet": price_net,
         "priceGross": money(price_net * 1.19),
         "vatPercent": 19,
-        "discountPercent": discount,
-        "weight": 0,
-        "metaData": meta_data,
+        "discountPercent": 0,
+        "metaData": {"type": "custom"},
     }
 
 
 def build_wiso_api_order_payload(order: Dict, customer_id: str) -> Dict:
     payload = {
         "customerId": int(customer_id) if str(customer_id).isdigit() else customer_id,
-        "priceKind": "net",
-        "date": datetime.now().strftime("%Y-%m-%d"),
         "positions": [wiso_order_position_payload(row) for row in order.get("rows", [])],
-        "columns": ["vat"],
     }
-
-    notes = ["Automatisch importiert aus dem Pondruff Preis Rechner."]
-    if order.get("purchase_order"):
-        notes.append(f"Bestell.-Nr. {order['purchase_order']}")
-    if order.get("project"):
-        notes.append(f"Projekt/Lieferschein: {order['project']}")
-    payload["notes"] = "\n".join(notes)
-
-    if order.get("purchase_order"):
-        payload["infoSectionCustomFields"] = [
-            {"label": "Bestell.-Nr.", "value": str(order["purchase_order"])},
-        ]
 
     return payload
 
@@ -1131,6 +1111,14 @@ def wiso_api_button(order: Dict, key: str) -> None:
             )
         except WisoApiError as exc:
             st.error(str(exc))
+            try:
+                token = wiso_get_token()
+                customer_id, _ = wiso_find_customer_id(str(order.get("customer", "")), token)
+                if customer_id:
+                    st.caption("WISO Payload zur Kontrolle")
+                    st.json(build_wiso_api_order_payload(order, customer_id))
+            except Exception:
+                pass
 
 
 def load_wiso_price_orders() -> list[Dict]:
