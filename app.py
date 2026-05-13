@@ -5,6 +5,9 @@ import io
 import html
 import json
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -834,6 +837,227 @@ def wiso_copy_button(order: Dict, key: str) -> None:
         """,
         height=56,
     )
+
+
+WISO_API_BASE_URL = "https://api.meinbuero.de/openapi"
+WISO_SECRET_KEYS = {
+    "api_key": "WISO_MEINBUERO_API_KEY",
+    "api_secret": "WISO_MEINBUERO_API_SECRET",
+    "ownership_id": "WISO_MEINBUERO_OWNERSHIP_ID",
+}
+
+
+class WisoApiError(Exception):
+    pass
+
+
+def secret_text(key: str) -> str:
+    try:
+        return str(st.secrets.get(key, "")).strip()
+    except Exception:
+        return ""
+
+
+def wiso_missing_secrets() -> list[str]:
+    return [secret_key for secret_key in WISO_SECRET_KEYS.values() if not secret_text(secret_key)]
+
+
+def wiso_json_request(
+    method: str,
+    path: str,
+    payload: Optional[Dict] = None,
+    token: str = "",
+    basic_auth: str = "",
+) -> Dict:
+    url = f"{WISO_API_BASE_URL}{path}"
+    data = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
+    headers = {"Accept": "application/json"}
+
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if basic_auth:
+        headers["Authorization"] = f"Basic {basic_auth}"
+
+    ownership_id = secret_text(WISO_SECRET_KEYS["ownership_id"])
+    if ownership_id:
+        headers["x-authorization-ownershipid"] = ownership_id
+
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        raise WisoApiError(f"WISO API Fehler {exc.code}: {detail or exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        raise WisoApiError(f"WISO API nicht erreichbar: {exc.reason}") from exc
+    except json.JSONDecodeError as exc:
+        raise WisoApiError("WISO API hat keine gueltige JSON-Antwort geliefert.") from exc
+
+
+def wiso_get_token() -> str:
+    api_key = secret_text(WISO_SECRET_KEYS["api_key"])
+    api_secret = secret_text(WISO_SECRET_KEYS["api_secret"])
+    ownership_id = secret_text(WISO_SECRET_KEYS["ownership_id"])
+    missing = wiso_missing_secrets()
+
+    if missing:
+        raise WisoApiError("WISO Secrets fehlen: " + ", ".join(missing))
+
+    basic = base64.b64encode(f"{api_key}:{api_secret}".encode("utf-8")).decode("ascii")
+    response = wiso_json_request("POST", "/auth/token", {"ownershipId": ownership_id}, basic_auth=basic)
+    token = str(response.get("token") or response.get("access_token") or "").strip()
+    if not token:
+        raise WisoApiError("WISO Token konnte nicht aus der Antwort gelesen werden.")
+    return token
+
+
+def compact_match_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def extract_wiso_data_list(response: Dict) -> list[Dict]:
+    data = response.get("data", [])
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        nested = data.get("data", [])
+        if isinstance(nested, list):
+            return [item for item in nested if isinstance(item, dict)]
+        return [data]
+    return []
+
+
+def wiso_find_customer_id(customer_name: str, token: str) -> tuple[Optional[str], list[str]]:
+    search = customer_name.strip()
+    if not search:
+        raise WisoApiError("Kein Kunde im Preisauftrag vorhanden.")
+
+    query = urllib.parse.urlencode({"limit": 20, "offset": 0, "orderBy": "name", "search": search})
+    response = wiso_json_request("GET", f"/customer?{query}", token=token)
+    customers = extract_wiso_data_list(response)
+    needle = compact_match_text(search)
+    candidates = []
+
+    for customer in customers:
+        name = str(customer.get("name") or customer.get("companyName") or customer.get("lastName") or "").strip()
+        if name:
+            candidates.append(name)
+        haystack = compact_match_text(name)
+        if needle and (needle == haystack or needle in haystack or haystack in needle):
+            customer_id = customer.get("id")
+            if customer_id:
+                return str(customer_id), candidates
+
+    if len(customers) == 1 and customers[0].get("id"):
+        return str(customers[0]["id"]), candidates
+
+    return None, candidates
+
+
+def float_from_wiso_value(value, default: float = 0.0) -> float:
+    text = str(value if value is not None else "").strip()
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
+        return default
+
+
+def wiso_order_position_payload(row: Dict) -> Dict:
+    description = str(row.get("Beschreibung") or "").strip()
+    title = description.splitlines()[0][:80] if description else "Pondruff Beschichtung"
+    article_no = str(row.get("Artikel-Nr.") or "").strip()
+    meta_data = {"type": "custom"}
+    if article_no:
+        meta_data["number"] = article_no
+
+    price_net = float_from_wiso_value(row.get("Listenpreis"), 0.0)
+    discount = float_from_wiso_value(row.get("Rabatt (%)"), 0.0)
+
+    return {
+        "amount": float_from_wiso_value(row.get("Menge"), 1.0),
+        "title": title,
+        "description": description,
+        "showDescription": True,
+        "unit": "Stk.",
+        "priceNet": price_net,
+        "priceGross": money(price_net * 1.19),
+        "vatPercent": 19,
+        "discountPercent": discount,
+        "weight": 0,
+        "metaData": meta_data,
+    }
+
+
+def build_wiso_api_order_payload(order: Dict, customer_id: str) -> Dict:
+    payload = {
+        "customerId": int(customer_id) if str(customer_id).isdigit() else customer_id,
+        "priceKind": "net",
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "positions": [wiso_order_position_payload(row) for row in order.get("rows", [])],
+        "columns": ["vat"],
+    }
+
+    notes = ["Automatisch importiert aus dem Pondruff Preis Rechner."]
+    if order.get("purchase_order"):
+        notes.append(f"Bestell.-Nr. {order['purchase_order']}")
+    if order.get("project"):
+        notes.append(f"Projekt/Lieferschein: {order['project']}")
+    payload["notes"] = "\n".join(notes)
+
+    if order.get("purchase_order"):
+        payload["infoSectionCustomFields"] = [
+            {"label": "Bestell.-Nr.", "value": str(order["purchase_order"])},
+        ]
+
+    return payload
+
+
+def create_wiso_meinbuero_order(order: Dict) -> Dict:
+    token = wiso_get_token()
+    customer_id, candidates = wiso_find_customer_id(str(order.get("customer", "")), token)
+    if not customer_id:
+        hint = f" Gefundene Treffer: {', '.join(candidates)}." if candidates else ""
+        raise WisoApiError(f"Kunde '{order.get('customer', '')}' wurde in WISO nicht eindeutig gefunden.{hint}")
+
+    payload = build_wiso_api_order_payload(order, customer_id)
+    response = wiso_json_request("POST", "/order/", payload, token=token)
+    return {"customer_id": customer_id, "payload": payload, "response": response}
+
+
+def wiso_api_button(order: Dict, key: str) -> None:
+    missing = wiso_missing_secrets()
+    if missing:
+        st.warning(
+            "WISO Direktimport ist vorbereitet, aber diese Streamlit Secrets fehlen noch: "
+            + ", ".join(missing)
+        )
+        return
+
+    if st.button("Auftrag direkt in WISO erstellen", key=f"wiso_api_order_{key}", use_container_width=True):
+        try:
+            with st.spinner("WISO-Kunde wird gesucht und Auftrag wird erstellt..."):
+                result = create_wiso_meinbuero_order(order)
+            response = result.get("response", {})
+            data = response.get("data") if isinstance(response, dict) else {}
+            order_number = ""
+            order_id = ""
+            if isinstance(data, dict):
+                order_number = str(data.get("number") or "")
+                order_id = str(data.get("id") or "")
+            st.success(
+                "WISO-Auftrag wurde erstellt"
+                + (f" (Nr. {order_number})" if order_number else "")
+                + (f" (ID {order_id})" if order_id and not order_number else "")
+                + "."
+            )
+        except WisoApiError as exc:
+            st.error(str(exc))
 
 
 def load_wiso_price_orders() -> list[Dict]:
@@ -1838,6 +2062,7 @@ def office() -> None:
             st.dataframe(df_order, use_container_width=True, hide_index=True)
             st.caption("Diesen Tab-Block kannst du direkt markieren/kopieren und in WISO als Positionsdaten weiterverwenden.")
             wiso_copy_button(selected_order, key="office")
+            wiso_api_button(selected_order, key="office")
             st.code(wiso_order_tsv(selected_order), language="text")
             st.download_button(
                 "Auftrag als CSV exportieren",
@@ -2367,6 +2592,7 @@ def price_calculator_page() -> None:
     st.markdown("### WISO-Vorschau")
     st.dataframe(pd.DataFrame(wiso_order["rows"]), use_container_width=True, hide_index=True)
     wiso_copy_button(wiso_order, key="price")
+    wiso_api_button(wiso_order, key="price")
     st.code(wiso_order_tsv(wiso_order), language="text")
     if st.button("Start: WISO-Auftrag speichern", use_container_width=True):
         save_wiso_price_order(wiso_order)
@@ -2382,6 +2608,9 @@ def setup_help() -> None:
 SUPABASE_URL = "https://DEIN-PROJEKT.supabase.co"
 SUPABASE_ANON_KEY = "DEIN-ANON-KEY"
 OPENAI_API_KEY = "sk-..."
+WISO_MEINBUERO_API_KEY = "..."
+WISO_MEINBUERO_API_SECRET = "..."
+WISO_MEINBUERO_OWNERSHIP_ID = "..."
     """, language="toml")
 
     st.markdown("### 2. Supabase SQL")
