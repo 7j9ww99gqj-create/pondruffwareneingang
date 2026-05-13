@@ -677,7 +677,7 @@ def wiso_compact_dimension_text(pos: Dict) -> str:
 
 def wiso_short_description_text(pos: Dict) -> str:
     description = str(pos.get("description") or "Beschichtung").strip()
-    description = re.sub(r"^pondruck?f[-\s]*[a-z0-9]+\s+beschichtung\s*", "", description, flags=re.IGNORECASE)
+    description = re.sub(r"^pondr?uff[-\s]*[a-z0-9-]+\s+beschichtung\s*", "", description, flags=re.IGNORECASE)
     description = re.split(r",?\s*material\s*:", description, maxsplit=1, flags=re.IGNORECASE)[0].strip()
     description = re.split(r",?\s*ma[ßs]e\s*:", description, maxsplit=1, flags=re.IGNORECASE)[0].strip()
     return description or "Beschichtung"
@@ -685,6 +685,15 @@ def wiso_short_description_text(pos: Dict) -> str:
 
 def money_de(value: float) -> str:
     return f"{money(value):.2f}".replace(".", ",")
+
+
+def wiso_purchase_order_value(pos: Dict, global_purchase_order: str = "") -> str:
+    local_value = str(pos.get("purchase_order") or "").strip()
+    global_value = str(global_purchase_order or "").strip()
+    values = [value for value in [local_value, global_value] if value]
+    if not values:
+        return ""
+    return max(values, key=len)
 
 
 def wiso_description_for_price_position(pos: Dict, is_last: bool, global_purchase_order: str = "") -> str:
@@ -697,7 +706,7 @@ def wiso_description_for_price_position(pos: Dict, is_last: bool, global_purchas
     if pos.get("cost_center"):
         lines.append(f"Kostenstelle: {pos['cost_center']}")
 
-    purchase_order = (pos.get("purchase_order") or global_purchase_order) if is_last else ""
+    purchase_order = wiso_purchase_order_value(pos, global_purchase_order) if is_last else ""
     if purchase_order:
         lines.append(f"Ihre Bestell.-Nr. {purchase_order}")
 
@@ -714,7 +723,7 @@ def wiso_import_description_for_position(pos: Dict, is_last: bool, global_purcha
     if pos.get("cost_center"):
         lines.append(f"Kostenstelle: {pos['cost_center']}")
 
-    purchase_order = (pos.get("purchase_order") or global_purchase_order) if is_last else ""
+    purchase_order = wiso_purchase_order_value(pos, global_purchase_order) if is_last else ""
     if purchase_order:
         lines.append(f"Ihre Bestell.-Nr. {purchase_order}")
 
