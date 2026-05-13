@@ -1961,11 +1961,6 @@ def price_calculator_page() -> None:
         )
         if uploaded_files:
             st.caption(f"{len(uploaded_files)} Datei(en) bereit zum Auslesen.")
-            preview_cols = st.columns(min(len(uploaded_files), 3))
-            for idx, uploaded_file in enumerate(uploaded_files[:3]):
-                preview_cols[idx % len(preview_cols)].image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
-        else:
-            st.image(ASSETS / "demo_lieferschein.png", caption="Dokument fuer Preisrechner", use_container_width=True)
 
         global_discount = st.number_input(
             "Rabatt / Prozente fuer alle Positionen",
