@@ -29,6 +29,7 @@ APP_DIR = Path(__file__).parent
 ASSETS = APP_DIR / "assets"
 
 BUCKET_NAME = "wareneingang-bilder"
+WISO_ORDERS_RESET_MARKER = APP_DIR / ".wiso_price_orders_reset"
 
 USERS = ["Kevin", "Tim", "Frank", "Julian", "Tobi", "Christian"]
 
@@ -1197,7 +1198,14 @@ def load_wiso_price_orders() -> list[Dict]:
 
     try:
         res = sb.table("wiso_preisauftraege").select("*").order("created_at", desc=True).execute()
-        cloud_orders = [row.get("order_data") for row in (res.data or []) if row.get("order_data")]
+        reset_cutoff = wiso_orders_reset_cutoff()
+        cloud_orders = []
+        for row in (res.data or []):
+            if reset_cutoff and str(row.get("created_at") or "").strip() <= reset_cutoff:
+                continue
+            order_data = row.get("order_data")
+            if order_data:
+                cloud_orders.append(order_data)
         seen = {order.get("id") for order in orders}
         for order in cloud_orders:
             if order.get("id") not in seen:
@@ -1253,6 +1261,40 @@ def delete_wiso_price_order(order_id: str) -> tuple[bool, str]:
         return True, "Auftrag geloescht."
     except Exception:
         return True, "Auftrag lokal geloescht. Fuer Supabase fehlt vermutlich noch die Delete-Policy."
+
+
+def wiso_orders_reset_cutoff() -> str:
+    if not WISO_ORDERS_RESET_MARKER.exists():
+        return ""
+    try:
+        return WISO_ORDERS_RESET_MARKER.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def clear_all_wiso_price_orders() -> tuple[bool, str]:
+    st.session_state.wiso_price_orders = []
+    cutoff = datetime.utcnow().isoformat()
+    try:
+        WISO_ORDERS_RESET_MARKER.write_text(cutoff, encoding="utf-8")
+    except Exception:
+        pass
+
+    sb = get_supabase()
+    if not sb:
+        return True, "Alle Auftraege lokal geloescht."
+
+    try:
+        sb.table("wiso_preisauftraege").delete().neq("order_id", "").execute()
+        return True, "Alle Auftraege geloescht."
+    except Exception:
+        return True, "Alte Auftraege werden ab jetzt ausgeblendet. Fuer Supabase fehlt vermutlich noch die Delete-Policy."
+
+
+def ensure_wiso_orders_reset_once() -> None:
+    if wiso_orders_reset_cutoff():
+        return
+    clear_all_wiso_price_orders()
 
 
 def normalize_ocr_result(data: Dict) -> Dict:
@@ -2192,6 +2234,7 @@ def wiso_text(e: Dict) -> str:
 
 def office() -> None:
     st.markdown("## Buero / WISO")
+    ensure_wiso_orders_reset_once()
 
     tab_orders, tab_entries = st.tabs(["Auftraege", "Wareneingaenge"])
 
@@ -2205,16 +2248,16 @@ def office() -> None:
                 f"{order.get('created_at', '')} - {order.get('customer', '')} - {order.get('purchase_order', '')}"
                 for order in orders
             ]
-            selected_label = st.selectbox("Auftrag auswaehlen", labels, key="office_price_order_select")
+            select_cols = st.columns([1, 0.12])
+            selected_label = select_cols[0].selectbox("Auftrag auswaehlen", labels, key="office_price_order_select")
             selected_order = orders[labels.index(selected_label)]
-            top_cols = st.columns([1, 0.12])
-            top_cols[0].metric("Gesamt netto", f"{float(selected_order.get('total', 0.0)):.2f} EUR")
-            if top_cols[1].button("X", key=f"delete_wiso_order_{selected_order.get('id', '')}", use_container_width=True):
+            if select_cols[1].button("X", key=f"delete_wiso_order_{selected_order.get('id', '')}", use_container_width=True):
                 ok, message = delete_wiso_price_order(selected_order.get("id", ""))
                 if ok:
                     st.success(message)
                     st.rerun()
                 st.error(message)
+            st.metric("Gesamt netto", f"{float(selected_order.get('total', 0.0)):.2f} EUR")
             df_order = pd.DataFrame(selected_order.get("rows", []))
             st.dataframe(df_order, use_container_width=True, hide_index=True)
             st.caption("Diesen Tab-Block kannst du direkt markieren/kopieren und in WISO als Positionsdaten weiterverwenden.")
