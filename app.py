@@ -1058,11 +1058,28 @@ def float_from_wiso_value(value, default: float = 0.0) -> float:
         return default
 
 
-def wiso_order_position_payload(row: Dict) -> Dict:
+def wiso_import_description(row: Dict) -> str:
     full_description = str(row.get("Beschreibung") or "").strip()
-    description = full_description.splitlines()[0].strip()
+    if not full_description:
+        return ""
+
+    lines = [line.strip() for line in full_description.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    formatted = [lines[0]]
+    for line in lines[1:]:
+        if line.startswith("Auftrags.-Nr. "):
+            line = "Ihre " + line
+        formatted.append(f"\t{line}")
+    return "\n".join(formatted)
+
+
+def wiso_order_position_payload(row: Dict) -> Dict:
+    description = wiso_import_description(row)
     article_no = str(row.get("Artikel-Nr.") or "").strip()
-    title = (article_no or description.splitlines()[0] or "Pondruff Beschichtung")[:80]
+    first_line = description.splitlines()[0].strip() if description else ""
+    title = (article_no or first_line or "Pondruff Beschichtung")[:80]
     price_net = float_from_wiso_value(row.get("Einzelpreis"), 0.0)
     if price_net <= 0:
         price_net = float_from_wiso_value(row.get("Listenpreis"), 0.0)
